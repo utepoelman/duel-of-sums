@@ -268,6 +268,8 @@
     let myId = '';
     let selectedOpponentId = null;
     let lobbyBots = [];
+    let sessionStartTime = 0;
+    let joinRetryTimer = null;
 
     // VOICE CHAT STATE
     let rtcPeerConn = null;
@@ -308,7 +310,7 @@
       const roomParam = urlParams.get('room');
       if (roomParam) {
         document.getElementById('joinCodeInput').value = roomParam;
-        setStatus('Room link loaded! Click "Join Game" to connect.');
+        setStatus('🚀 Room link loaded (' + roomParam + ')! Enter your name and click Join Game.');
       }
     });
 
@@ -333,12 +335,13 @@
     // --- CLOUD SSE NETWORK ENGINE ---
     function initNetworkSession(onReady) {
       myId = (isHost ? 'host-' : 'guest-') + Math.random().toString(36).substr(2, 6);
-      
+      sessionStartTime = Math.floor(Date.now() / 1000);
+
       if (eventSource) {
         eventSource.close();
       }
 
-      const streamUrl = 'https://ntfy.sh/duel-sums-v4-' + roomCode + '/sse';
+      const streamUrl = 'https://ntfy.sh/duel-sums-v5-' + roomCode + '/sse';
       eventSource = new EventSource(streamUrl);
 
       eventSource.onopen = () => {
@@ -348,10 +351,14 @@
       eventSource.onmessage = (event) => {
         try {
           const raw = JSON.parse(event.data);
-          if (!raw.message) return;
-          const data = JSON.parse(raw.message);
           
+          // FILTER OUT CACHED STALE MESSAGES FROM PREVIOUS GAME SESSIONS
+          if (raw.time && raw.time < sessionStartTime - 4) return;
+          if (!raw.message) return;
+
+          const data = JSON.parse(raw.message);
           if (data.senderId === myId) return; // Ignore self-echoes
+
           handleIncomingData(data);
         } catch (e) {
           // Ignore non-JSON system broadcasts
@@ -365,7 +372,7 @@
 
     function sendNetworkMessage(dataObj) {
       dataObj.senderId = myId;
-      fetch('https://ntfy.sh/duel-sums-v4-' + roomCode, {
+      fetch('https://ntfy.sh/duel-sums-v5-' + roomCode, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(dataObj)
@@ -491,7 +498,7 @@
       isHost = true;
       roomCode = Math.floor(1000 + Math.random() * 9000).toString();
 
-      // CLEAN CLEAR PREVIOUS GAME STATE TO PREVENT DUPLICATE PLAYERS
+      // CLEAR PREVIOUS PLAYERS
       gameState.players = [];
       gameState.decks = {};
       gameState.lastDuel = null;
@@ -522,7 +529,7 @@
       });
     });
 
-    // --- 2. JOIN A GAME ---
+    // --- 2. JOIN A GAME WITH AUTO-RETRY ---
     document.getElementById('joinBtn').addEventListener('click', () => {
       const inputCode = document.getElementById('joinCodeInput').value.trim();
       if (!inputCode) return alert('Please enter room code');
@@ -531,21 +538,39 @@
       isHost = false;
       roomCode = inputCode;
 
+      if (joinRetryTimer) clearInterval(joinRetryTimer);
+
       setStatus('Connecting to room ' + roomCode + '...');
 
       initNetworkSession(() => {
         setStatus('Requesting join from Host...');
-        sendNetworkMessage({
-          type: 'JOIN_REQUEST',
-          id: myId,
-          name: myName
-        });
+        
+        // AUTO-RETRY JOIN REQUEST EVERY 2.5 SECONDS UNTIL STATE IS RECEIVED
+        const sendJoinReq = () => {
+          sendNetworkMessage({
+            type: 'JOIN_REQUEST',
+            id: myId,
+            name: myName
+          });
+        };
+
+        sendJoinReq();
+
+        joinRetryTimer = setInterval(() => {
+          if (document.getElementById('game').style.display === 'block') {
+            clearInterval(joinRetryTimer);
+          } else {
+            setStatus('Retrying join connection...');
+            sendJoinReq();
+          }
+        }, 2500);
       });
     });
 
     // --- INCOMING MESSAGE HANDLER ---
     function handleIncomingData(data) {
       if (data.type === 'STATE_UPDATE') {
+        if (joinRetryTimer) clearInterval(joinRetryTimer);
         gameState = data.state;
         if (!document.getElementById('game').style.display || document.getElementById('game').style.display === 'none') {
           showGameUI();
@@ -567,12 +592,10 @@
       else if (isHost) {
         // HOST PROCESSES CLIENT ACTIONS
         if (data.type === 'JOIN_REQUEST') {
-          if (!gameState.players.some(p => p.id === data.id)) {
-            dealCardsToPlayer(data.id, data.name, false, false, 'easy');
-            gameState.statusMessage = data.name + ' joined the game!';
-            broadcastState();
-            updateUI();
-          }
+          dealCardsToPlayer(data.id, data.name, false, false, 'easy');
+          gameState.statusMessage = data.name + ' joined the game!';
+          broadcastState();
+          updateUI();
         }
         else if (data.type === 'CHALLENGE_ACTION') {
           handleDuel(data.challengerId, data.defenderId, data.operation);
@@ -597,48 +620,42 @@
     }
 
     function dealCardsToPlayer(playerId, playerName, playerIsHost = false, isBot = false, difficulty = 'easy') {
+      let existingPlayer = gameState.players.find(p => p.id === playerId);
+      if (existingPlayer) {
+        existingPlayer.name = playerName;
+        return; // Already dealt cards
+      }
+
       const dealCount = Math.min(gameState.cardsPerPlayer, gameState.unusedDeck.length);
       const dealtCards = gameState.unusedDeck.splice(0, dealCount);
 
       gameState.decks[playerId] = dealtCards;
-
-      let existingPlayer = gameState.players.find(p => p.id === playerId);
-      if (existingPlayer) {
-        existingPlayer.name = playerName;
-        existingPlayer.count = dealtCards.length;
-        existingPlayer.isHost = playerIsHost;
-        existingPlayer.isBot = isBot;
-        existingPlayer.difficulty = difficulty;
-      } else {
-        gameState.players.push({
-          id: playerId,
-          name: playerName,
-          count: dealtCards.length,
-          isHost: playerIsHost,
-          isBot: isBot,
-          difficulty: difficulty
-        });
-      }
+      gameState.players.push({
+        id: playerId,
+        name: playerName,
+        count: dealtCards.length,
+        isHost: playerIsHost,
+        isBot: isBot,
+        difficulty: difficulty
+      });
     }
 
-    // --- 4. VISUALIZED RANDOM SELECTION ---
+    // --- 4. VISUALIZED RANDOM SELECTION (LOCAL ANIMATION ONLY TO AVOID NETWORK THROTTLING) ---
     async function animateRandomStarterSelection() {
       const activePlayers = gameState.players.filter(p => p.count > 0);
       if (activePlayers.length === 0) return;
 
       gameState.isDueling = true;
       gameState.isSelectingStarter = true;
-      const totalSteps = 12;
+      const totalSteps = 10;
 
       for (let i = 0; i < totalSteps; i++) {
         const tempPlayer = activePlayers[i % activePlayers.length];
         gameState.currentTurn = tempPlayer.id;
         gameState.statusMessage = '🎲 Selecting starting player: ' + tempPlayer.name + '...';
         
-        broadcastState();
-        updateUI();
-
-        await delay(90 + (i * 18));
+        updateUI(); // Local UI render only during fast frames
+        await delay(100);
       }
 
       const winner = activePlayers[Math.floor(Math.random() * activePlayers.length)];
@@ -647,7 +664,7 @@
       gameState.isDueling = false;
       gameState.isSelectingStarter = false;
 
-      broadcastState();
+      broadcastState(); // Single network broadcast when complete
       updateUI();
     }
 
