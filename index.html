@@ -491,6 +491,13 @@
       isHost = true;
       roomCode = Math.floor(1000 + Math.random() * 9000).toString();
 
+      // CLEAN CLEAR PREVIOUS GAME STATE TO PREVENT DUPLICATE PLAYERS
+      gameState.players = [];
+      gameState.decks = {};
+      gameState.lastDuel = null;
+      gameState.winnerName = null;
+      gameState.eliminatedNotice = null;
+
       gameState.allowMult = document.getElementById('allowMult').checked;
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
@@ -594,14 +601,24 @@
       const dealtCards = gameState.unusedDeck.splice(0, dealCount);
 
       gameState.decks[playerId] = dealtCards;
-      gameState.players.push({
-        id: playerId,
-        name: playerName,
-        count: dealtCards.length,
-        isHost: playerIsHost,
-        isBot: isBot,
-        difficulty: difficulty
-      });
+
+      let existingPlayer = gameState.players.find(p => p.id === playerId);
+      if (existingPlayer) {
+        existingPlayer.name = playerName;
+        existingPlayer.count = dealtCards.length;
+        existingPlayer.isHost = playerIsHost;
+        existingPlayer.isBot = isBot;
+        existingPlayer.difficulty = difficulty;
+      } else {
+        gameState.players.push({
+          id: playerId,
+          name: playerName,
+          count: dealtCards.length,
+          isHost: playerIsHost,
+          isBot: isBot,
+          difficulty: difficulty
+        });
+      }
     }
 
     // --- 4. VISUALIZED RANDOM SELECTION ---
