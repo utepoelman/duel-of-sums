@@ -260,6 +260,18 @@
   <script>
     const APP_PREFIX = "DUEL-OF-SUMS-"; 
 
+    // STUN CONFIGURATION FOR CROSS-DEVICE WEBRTC NAT TRAVERSAL
+    const peerConfig = {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' }
+        ]
+      }
+    };
+
     let peer = null;
     let isHost = false;
     let roomCode = '';
@@ -290,7 +302,7 @@
       maxNum: 12,
       gameStarted: false,
       isDueling: false,
-      isSelectingStarter: false, // FLAG TO PREVENT BOT RACE CONDITION
+      isSelectingStarter: false,
       eliminatedNotice: null,
       winnerName: null
     };
@@ -342,7 +354,13 @@
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
 
       document.getElementById('lobbyStatus').innerText = 'Creating room...';
-      peer = new Peer(APP_PREFIX + roomCode);
+      
+      // Instantiate Peer with STUN config
+      peer = new Peer(APP_PREFIX + roomCode, peerConfig);
+
+      peer.on('error', (err) => {
+        document.getElementById('lobbyStatus').innerText = 'Room Creation Error: ' + err.type;
+      });
 
       peer.on('open', async () => {
         initializeMasterDeck();
@@ -402,7 +420,7 @@
     // --- 2. JOIN A GAME ---
     document.getElementById('joinBtn').addEventListener('click', () => {
       const inputCode = document.getElementById('joinCodeInput').value.trim();
-      if (!inputCode) return alert('Please enter code');
+      if (!inputCode) return alert('Please enter room code');
 
       myName = getEnteredName();
       myId = 'guest-' + Math.random().toString(36).substr(2, 5);
@@ -410,11 +428,19 @@
       roomCode = inputCode;
 
       document.getElementById('lobbyStatus').innerText = 'Connecting...';
-      peer = new Peer();
+      
+      // Instantiate Peer with STUN config
+      peer = new Peer(peerConfig);
+
+      peer.on('error', (err) => {
+        document.getElementById('lobbyStatus').innerText = 'Connection Error (' + err.type + '). Please verify code.';
+      });
 
       peer.on('open', () => {
         setupMediaCallListener();
-        hostConnection = peer.connect(APP_PREFIX + roomCode);
+        hostConnection = peer.connect(APP_PREFIX + roomCode, {
+          reliable: true
+        });
 
         hostConnection.on('open', () => {
           hostConnection.send({ type: 'JOIN_REQUEST', id: myId, requestedName: myName });
@@ -468,7 +494,7 @@
       if (activePlayers.length === 0) return;
 
       gameState.isDueling = true;
-      gameState.isSelectingStarter = true; // Lock bot triggering during animation
+      gameState.isSelectingStarter = true;
       const totalSteps = 12;
 
       for (let i = 0; i < totalSteps; i++) {
@@ -554,7 +580,6 @@
     }
 
     async function checkAndTriggerBotTurn() {
-      // Guard clauses to prevent race conditions
       if (!isHost || gameState.isDueling || gameState.isSelectingStarter || gameState.winnerName) return;
 
       const activePlayer = gameState.players.find(p => p.id === gameState.currentTurn);
