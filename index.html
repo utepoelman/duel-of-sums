@@ -117,9 +117,12 @@
 
     <p style="margin: 14px 0;">— OR —</p>
 
-    <input type="text" id="joinCodeInput" placeholder="Enter 4-digit code" maxlength="4" style="width: 150px; padding: 8px; font-size: 1em;">
+    <input type="text" id="joinCodeInput" placeholder="Enter room code" style="width: 180px; padding: 8px; font-size: 1em;">
     <button id="joinBtn" class="btn">Join Game</button>
-    <p id="lobbyStatus" style="color: #64748b; font-size: 0.9em; margin-top: 10px;"></p>
+    
+    <div id="lobbyStatusContainer" style="margin-top: 12px; padding: 10px; background: #f1f5f9; border-radius: 8px; font-size: 0.9em;">
+      <strong>Status:</strong> <span id="lobbyStatus" style="color: #64748b;">Ready to host or join</span>
+    </div>
   </div>
 
   <!-- GAMEPLAY SCREEN -->
@@ -127,7 +130,10 @@
     
     <!-- TOP STATUS BAR -->
     <div class="top-bar">
-      <div><strong>Room Code:</strong> <span id="displayCode" style="color:#0284c7; font-weight:bold;">----</span></div>
+      <div>
+        <strong>Room Code:</strong> <span id="displayCode" style="color:#0284c7; font-weight:bold;">----</span>
+        <button class="btn btn-secondary" onclick="copyInviteLink()" style="padding: 3px 8px; font-size: 0.78em; margin-left: 6px;">📋 Copy Link</button>
+      </div>
       <div><strong>You:</strong> <span id="displayName">--</span></div>
       <div>
         <button id="voiceBtn" class="btn btn-voice" onclick="toggleVoiceChat()" style="padding: 4px 10px; font-size: 0.85em;">🎙️ Enable Voice</button>
@@ -260,16 +266,14 @@
   <script>
     const APP_PREFIX = "DUEL-OF-SUMS-"; 
 
-    // STUN & TURN CONFIGURATION FOR CROSS-BORDER WEBRTC RELAY
+    // MULTI-REGION RELAY & TURN CONFIGURATION
     const peerConfig = {
+      debug: 1,
       config: {
         iceServers: [
-          // Standard STUN Servers
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:openrelay.metered.ca:80' },
-
-          // Global TURN Servers (Bypasses Cross-Border / Cellular Firewall Blocks)
           {
             urls: 'turn:openrelay.metered.ca:80',
             username: 'openrelayproject',
@@ -324,9 +328,32 @@
       winnerName: null
     };
 
+    // --- AUTO-FILL FROM DIRECT INVITE URL ---
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        document.getElementById('joinCodeInput').value = roomParam;
+        document.getElementById('lobbyStatus').innerText = 'Room code loaded from link! Enter name & click Join.';
+      }
+    });
+
     function getEnteredName() {
       const input = document.getElementById('playerNameInput').value.trim();
       return input.length > 0 ? input : 'Player ' + Math.floor(100 + Math.random() * 900);
+    }
+
+    function setStatus(msg) {
+      document.getElementById('lobbyStatus').innerText = msg;
+    }
+
+    function copyInviteLink() {
+      const shareUrl = window.location.origin + window.location.pathname + '?room=' + roomCode;
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        alert('📋 Invite link copied to clipboard!\nSend this link to your friend so they can join directly.');
+      }).catch(() => {
+        alert('Room Code: ' + roomCode);
+      });
     }
 
     // --- LOBBY BOT SETUP ---
@@ -370,19 +397,20 @@
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
 
-      document.getElementById('lobbyStatus').innerText = 'Creating room...';
+      setStatus('Connecting to global cloud server...');
       
-      peer = new Peer(APP_PREFIX + roomCode, peerConfig);
+      const hostPeerId = APP_PREFIX + roomCode;
+      peer = new Peer(hostPeerId, peerConfig);
 
       peer.on('error', (err) => {
-        document.getElementById('lobbyStatus').innerText = 'Room Error: ' + err.type;
+        setStatus('Cloud Server Error (' + err.type + '). Please click Host again.');
       });
 
       peer.on('open', async () => {
+        setStatus('Room created successfully! Waiting for players...');
         initializeMasterDeck();
         dealCardsToPlayer(myId, myName, true, false, 'easy');
 
-        // Add pre-queued AI Bots
         lobbyBots.forEach(b => {
           dealCardsToPlayer(b.id, b.name, false, true, b.difficulty);
         });
@@ -400,7 +428,14 @@
         let guestId = '';
         let guestName = '';
 
+        conn.on('open', () => {
+          // Keep-alive heartbeat over WebRTC
+          setInterval(() => { if(conn.open) conn.send({ type: 'PING' }); }, 5000);
+        });
+
         conn.on('data', (data) => {
+          if (data.type === 'PING') return;
+
           if (data.type === 'JOIN_REQUEST') {
             guestId = data.id;
             guestName = data.requestedName;
@@ -443,27 +478,43 @@
       isHost = false;
       roomCode = inputCode;
 
-      document.getElementById('lobbyStatus').innerText = 'Connecting...';
-      
+      setStatus('Step 1/3: Registering on PeerJS Cloud...');
+
       peer = new Peer(peerConfig);
 
+      let connectionTimeout = setTimeout(() => {
+        setStatus('⚠️ Handshake timed out. Ask host for direct link or re-host room.');
+      }, 15000);
+
       peer.on('error', (err) => {
-        document.getElementById('lobbyStatus').innerText = 'Connection Error (' + err.type + '). Please check code.';
+        clearTimeout(connectionTimeout);
+        if (err.type === 'peer-not-found') {
+          setStatus('❌ Room ID not found. Ensure Host is active and check code.');
+        } else {
+          setStatus('❌ Peer Error (' + err.type + '). Please try again.');
+        }
       });
 
       peer.on('open', () => {
+        setStatus('Step 2/3: Searching for Host (' + roomCode + ')...');
         setupMediaCallListener();
         
-        hostConnection = peer.connect(APP_PREFIX + roomCode, {
+        const targetHostId = APP_PREFIX + roomCode;
+        hostConnection = peer.connect(targetHostId, {
           reliable: true
         });
 
         hostConnection.on('open', () => {
+          clearTimeout(connectionTimeout);
+          setStatus('Step 3/3: Connected! Syncing game state...');
+          
           hostConnection.send({ type: 'JOIN_REQUEST', id: myId, requestedName: myName });
           showGameUI();
         });
 
         hostConnection.on('data', (data) => {
+          if (data.type === 'PING') return;
+
           if (data.type === 'WELCOME') {
             myName = data.assignedName;
             document.getElementById('displayName').innerText = myName;
