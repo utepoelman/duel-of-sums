@@ -266,14 +266,18 @@
   <script>
     const APP_PREFIX = "DUEL-OF-SUMS-"; 
 
-    // MULTI-REGION RELAY & TURN CONFIGURATION
+    // HIGH-AVAILABILITY MULTI-REGION STUN/TURN CONFIG
     const peerConfig = {
       debug: 1,
+      secure: true,
+      port: 443,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:openrelay.metered.ca:80' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
           {
             urls: 'turn:openrelay.metered.ca:80',
             username: 'openrelayproject',
@@ -289,7 +293,8 @@
             username: 'openrelayproject',
             credential: 'openrelayproject'
           }
-        ]
+        ],
+        iceCandidatePoolSize: 10
       }
     };
 
@@ -328,13 +333,13 @@
       winnerName: null
     };
 
-    // --- AUTO-FILL FROM DIRECT INVITE URL ---
+    // AUTO-FILL ROOM CODE FROM DIRECT URL
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const roomParam = urlParams.get('room');
       if (roomParam) {
         document.getElementById('joinCodeInput').value = roomParam;
-        document.getElementById('lobbyStatus').innerText = 'Room code loaded from link! Enter name & click Join.';
+        setStatus('Room link loaded! Click "Join Game" to connect.');
       }
     });
 
@@ -350,7 +355,7 @@
     function copyInviteLink() {
       const shareUrl = window.location.origin + window.location.pathname + '?room=' + roomCode;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('📋 Invite link copied to clipboard!\nSend this link to your friend so they can join directly.');
+        alert('📋 Direct link copied!\nSend this exact link to your friend so they can bypass room search.');
       }).catch(() => {
         alert('Room Code: ' + roomCode);
       });
@@ -397,17 +402,17 @@
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
 
-      setStatus('Connecting to global cloud server...');
+      setStatus('Registering host room with global servers...');
       
       const hostPeerId = APP_PREFIX + roomCode;
       peer = new Peer(hostPeerId, peerConfig);
 
       peer.on('error', (err) => {
-        setStatus('Cloud Server Error (' + err.type + '). Please click Host again.');
+        setStatus('Host Error: ' + err.type + '. Try clicking Host again.');
       });
 
       peer.on('open', async () => {
-        setStatus('Room created successfully! Waiting for players...');
+        setStatus('Room ready! Share Room Code: ' + roomCode);
         initializeMasterDeck();
         dealCardsToPlayer(myId, myName, true, false, 'easy');
 
@@ -428,10 +433,10 @@
         let guestId = '';
         let guestName = '';
 
-        conn.on('open', () => {
-          // Keep-alive heartbeat over WebRTC
-          setInterval(() => { if(conn.open) conn.send({ type: 'PING' }); }, 5000);
-        });
+        // Keep connection warm with heartbeats across long distance links
+        const heartbeat = setInterval(() => {
+          if (conn.open) conn.send({ type: 'PING' });
+        }, 3000);
 
         conn.on('data', (data) => {
           if (data.type === 'PING') return;
@@ -459,6 +464,7 @@
         });
 
         conn.on('close', () => {
+          clearInterval(heartbeat);
           guestConnections = guestConnections.filter(g => g.id !== guestId);
           gameState.players = gameState.players.filter(p => p.id !== guestId);
           delete gameState.decks[guestId];
@@ -468,7 +474,7 @@
       });
     });
 
-    // --- 2. JOIN A GAME ---
+    // --- 2. JOIN A GAME WITH HANDSHAKE RETRIES ---
     document.getElementById('joinBtn').addEventListener('click', () => {
       const inputCode = document.getElementById('joinCodeInput').value.trim();
       if (!inputCode) return alert('Please enter room code');
@@ -478,35 +484,54 @@
       isHost = false;
       roomCode = inputCode;
 
-      setStatus('Step 1/3: Registering on PeerJS Cloud...');
+      setStatus('Step 1/3: Connecting to Cloud Relay...');
 
       peer = new Peer(peerConfig);
 
-      let connectionTimeout = setTimeout(() => {
-        setStatus('⚠️ Handshake timed out. Ask host for direct link or re-host room.');
-      }, 15000);
+      let handshakeTimer = null;
 
       peer.on('error', (err) => {
-        clearTimeout(connectionTimeout);
+        if (handshakeTimer) clearTimeout(handshakeTimer);
         if (err.type === 'peer-not-found') {
-          setStatus('❌ Room ID not found. Ensure Host is active and check code.');
+          setStatus('❌ Room not found. Confirm the Host is still online.');
         } else {
-          setStatus('❌ Peer Error (' + err.type + '). Please try again.');
+          setStatus('❌ Relay Error: ' + err.type + '. Try again.');
         }
       });
 
       peer.on('open', () => {
-        setStatus('Step 2/3: Searching for Host (' + roomCode + ')...');
+        setStatus('Step 2/3: Finding Host (' + roomCode + ')...');
         setupMediaCallListener();
         
         const targetHostId = APP_PREFIX + roomCode;
+        
+        // Initiate WebRTC Connection
         hostConnection = peer.connect(targetHostId, {
           reliable: true
         });
 
+        // Track ICE candidates negotiation
+        if (hostConnection.peerConnection) {
+          hostConnection.peerConnection.oniceconnectionstatechange = () => {
+            const state = hostConnection.peerConnection.iceConnectionState;
+            if (state === 'checking') {
+              setStatus('Step 3/3: Traversing International Routers...');
+            } else if (state === 'failed') {
+              setStatus('❌ Connection blocked by router firewall. Retry via Direct Link.');
+            }
+          };
+        }
+
+        // Timeout Fallback
+        handshakeTimer = setTimeout(() => {
+          if (!hostConnection || !hostConnection.open) {
+            setStatus('⚠️ Long-distance Handshake timed out. Send Direct Link to your friend!');
+          }
+        }, 25000);
+
         hostConnection.on('open', () => {
-          clearTimeout(connectionTimeout);
-          setStatus('Step 3/3: Connected! Syncing game state...');
+          if (handshakeTimer) clearTimeout(handshakeTimer);
+          setStatus('Connected! Syncing state...');
           
           hostConnection.send({ type: 'JOIN_REQUEST', id: myId, requestedName: myName });
           showGameUI();
