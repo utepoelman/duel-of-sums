@@ -260,14 +260,31 @@
   <script>
     const APP_PREFIX = "DUEL-OF-SUMS-"; 
 
-    // STUN CONFIGURATION FOR CROSS-DEVICE WEBRTC NAT TRAVERSAL
+    // STUN & TURN CONFIGURATION FOR CROSS-BORDER WEBRTC RELAY
     const peerConfig = {
       config: {
         iceServers: [
+          // Standard STUN Servers
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:global.stun.twilio.com:3478' }
+          { urls: 'stun:openrelay.metered.ca:80' },
+
+          // Global TURN Servers (Bypasses Cross-Border / Cellular Firewall Blocks)
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
         ]
       }
     };
@@ -355,11 +372,10 @@
 
       document.getElementById('lobbyStatus').innerText = 'Creating room...';
       
-      // Instantiate Peer with STUN config
       peer = new Peer(APP_PREFIX + roomCode, peerConfig);
 
       peer.on('error', (err) => {
-        document.getElementById('lobbyStatus').innerText = 'Room Creation Error: ' + err.type;
+        document.getElementById('lobbyStatus').innerText = 'Room Error: ' + err.type;
       });
 
       peer.on('open', async () => {
@@ -429,15 +445,15 @@
 
       document.getElementById('lobbyStatus').innerText = 'Connecting...';
       
-      // Instantiate Peer with STUN config
       peer = new Peer(peerConfig);
 
       peer.on('error', (err) => {
-        document.getElementById('lobbyStatus').innerText = 'Connection Error (' + err.type + '). Please verify code.';
+        document.getElementById('lobbyStatus').innerText = 'Connection Error (' + err.type + '). Please check code.';
       });
 
       peer.on('open', () => {
         setupMediaCallListener();
+        
         hostConnection = peer.connect(APP_PREFIX + roomCode, {
           reliable: true
         });
@@ -457,6 +473,10 @@
           } else if (data.type === 'CHAT_BROADCAST') {
             appendChatMessage(data.sender, data.text);
           }
+        });
+
+        hostConnection.on('close', () => {
+          alert('Disconnected from Host.');
         });
       });
     });
