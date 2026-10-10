@@ -269,8 +269,6 @@
     // HIGH-AVAILABILITY MULTI-REGION STUN/TURN CONFIG
     const peerConfig = {
       debug: 1,
-      secure: true,
-      port: 443,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -278,20 +276,26 @@
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun.cloudflare.com:3478' },
           { urls: 'stun:global.stun.twilio.com:3478' },
+          { urls: 'stun:openrelay.metered.ca:80' },
           {
-            urls: 'turn:openrelay.metered.ca:80',
+            urls: 'turn:staticauth.openrelay.metered.ca:80',
             username: 'openrelayproject',
-            credential: 'openrelayproject'
+            credential: 'openrelayprojectsecret'
           },
           {
-            urls: 'turn:openrelay.metered.ca:443',
+            urls: 'turn:staticauth.openrelay.metered.ca:443',
             username: 'openrelayproject',
-            credential: 'openrelayproject'
+            credential: 'openrelayprojectsecret'
           },
           {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            urls: 'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
             username: 'openrelayproject',
-            credential: 'openrelayproject'
+            credential: 'openrelayprojectsecret'
+          },
+          {
+            urls: 'turns:staticauth.openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayprojectsecret'
           }
         ],
         iceCandidatePoolSize: 10
@@ -433,7 +437,6 @@
         let guestId = '';
         let guestName = '';
 
-        // Keep connection warm with heartbeats across long distance links
         const heartbeat = setInterval(() => {
           if (conn.open) conn.send({ type: 'PING' });
         }, 3000);
@@ -493,7 +496,7 @@
       peer.on('error', (err) => {
         if (handshakeTimer) clearTimeout(handshakeTimer);
         if (err.type === 'peer-not-found') {
-          setStatus('❌ Room not found. Confirm the Host is still online.');
+          setStatus('❌ Room not found. Confirm the Host is online.');
         } else {
           setStatus('❌ Relay Error: ' + err.type + '. Try again.');
         }
@@ -505,27 +508,24 @@
         
         const targetHostId = APP_PREFIX + roomCode;
         
-        // Initiate WebRTC Connection
         hostConnection = peer.connect(targetHostId, {
           reliable: true
         });
 
-        // Track ICE candidates negotiation
         if (hostConnection.peerConnection) {
           hostConnection.peerConnection.oniceconnectionstatechange = () => {
             const state = hostConnection.peerConnection.iceConnectionState;
             if (state === 'checking') {
               setStatus('Step 3/3: Traversing International Routers...');
             } else if (state === 'failed') {
-              setStatus('❌ Connection blocked by router firewall. Retry via Direct Link.');
+              setStatus('❌ Connection blocked by phone video call or router firewall.');
             }
           };
         }
 
-        // Timeout Fallback
         handshakeTimer = setTimeout(() => {
           if (!hostConnection || !hostConnection.open) {
-            setStatus('⚠️ Long-distance Handshake timed out. Send Direct Link to your friend!');
+            setStatus('⚠️ Handshake timed out. Close active video calls & try again!');
           }
         }, 25000);
 
