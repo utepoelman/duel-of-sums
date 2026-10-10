@@ -38,6 +38,8 @@
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
     .btn-success { background: #16a34a; }
     .btn-success:hover { background: #15803d; }
+    .btn-voice { background: #8b5cf6; }
+    .btn-voice:hover { background: #7c3aed; }
     .btn-secondary { background: #64748b; }
     .op-btn { font-size: 1.5em; width: 54px; height: 54px; margin: 4px; border-radius: 8px; }
     
@@ -134,6 +136,7 @@
       </div>
       <div><strong>You:</strong> <span id="displayName">--</span></div>
       <div>
+        <button id="voiceBtn" class="btn btn-voice" onclick="toggleVoiceChat()" style="padding: 4px 10px; font-size: 0.85em;">🎙️ Enable Voice</button>
         <span id="myCardsCount" class="badge">Cards: 0</span>
       </div>
     </div>
@@ -257,7 +260,7 @@
   </div>
 
   <script>
-    // ZERO-DEPENDENCY NATIVE SSE NETWORKING ENGINE
+    // NETWORKING ENGINE: SSE (GAME DATA) + NATIVE WEBRTC (AUDIO)
     let eventSource = null;
     let isHost = false;
     let roomCode = '';
@@ -265,6 +268,19 @@
     let myId = '';
     let selectedOpponentId = null;
     let lobbyBots = [];
+
+    // VOICE CHAT STATE
+    let rtcPeerConn = null;
+    let localAudioStream = null;
+    let isMuted = false;
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' }
+      ]
+    };
 
     const delay = ms => new Promise(res => setTimeout(res, ms));
 
@@ -354,6 +370,89 @@
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(dataObj)
       }).catch(err => console.error('Network send error:', err));
+    }
+
+    // --- VOICE CHAT ENGINE (WebRTC signaling via SSE) ---
+    async function toggleVoiceChat() {
+      const voiceBtn = document.getElementById('voiceBtn');
+      if (!localAudioStream) {
+        try {
+          localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          voiceBtn.innerText = '🎙️ Mute Voice';
+          voiceBtn.style.background = '#16a34a';
+
+          createVoicePeerConnection();
+          if (isHost) {
+            const offer = await rtcPeerConn.createOffer();
+            await rtcPeerConn.setLocalDescription(offer);
+            sendNetworkMessage({ type: 'VOICE_OFFER', offer: offer });
+          }
+        } catch (err) {
+          alert('Microphone access error: ' + err.message);
+        }
+      } else {
+        isMuted = !isMuted;
+        localAudioStream.getAudioTracks()[0].enabled = !isMuted;
+        voiceBtn.innerText = isMuted ? '🔇 Unmuted' : '🎙️ Mute Voice';
+        voiceBtn.style.background = isMuted ? '#ef4444' : '#16a34a';
+      }
+    }
+
+    function createVoicePeerConnection() {
+      if (rtcPeerConn) return;
+      rtcPeerConn = new RTCPeerConnection(rtcConfig);
+
+      if (localAudioStream) {
+        localAudioStream.getTracks().forEach(track => rtcPeerConn.addTrack(track, localAudioStream));
+      }
+
+      rtcPeerConn.ontrack = (event) => {
+        let audioEl = document.getElementById('remoteVoiceAudio');
+        if (!audioEl) {
+          audioEl = document.createElement('audio');
+          audioEl.id = 'remoteVoiceAudio';
+          audioEl.autoplay = true;
+          document.body.appendChild(audioEl);
+        }
+        audioEl.srcObject = event.streams[0];
+      };
+
+      rtcPeerConn.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendNetworkMessage({ type: 'VOICE_ICE', candidate: event.candidate });
+        }
+      };
+    }
+
+    async function handleVoiceOffer(offer) {
+      if (!localAudioStream) {
+        try {
+          localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          document.getElementById('voiceBtn').innerText = '🎙️ Mute Voice';
+          document.getElementById('voiceBtn').style.background = '#16a34a';
+        } catch(e) {
+          console.warn("Audio mic prompt bypassed or declined by user.");
+        }
+      }
+      createVoicePeerConnection();
+      await rtcPeerConn.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await rtcPeerConn.createAnswer();
+      await rtcPeerConn.setLocalDescription(answer);
+      sendNetworkMessage({ type: 'VOICE_ANSWER', answer: answer });
+    }
+
+    async function handleVoiceAnswer(answer) {
+      if (rtcPeerConn) {
+        await rtcPeerConn.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    }
+
+    async function handleVoiceIce(candidate) {
+      if (rtcPeerConn && candidate) {
+        try {
+          await rtcPeerConn.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch(e) { console.error('ICE Candidate Error:', e); }
+      }
     }
 
     // --- LOBBY BOT SETUP ---
@@ -448,6 +547,15 @@
       }
       else if (data.type === 'CHAT_BROADCAST') {
         appendChatMessage(data.sender, data.text);
+      }
+      else if (data.type === 'VOICE_OFFER') {
+        handleVoiceOffer(data.offer);
+      }
+      else if (data.type === 'VOICE_ANSWER') {
+        handleVoiceAnswer(data.answer);
+      }
+      else if (data.type === 'VOICE_ICE') {
+        handleVoiceIce(data.candidate);
       }
       else if (isHost) {
         // HOST PROCESSES CLIENT ACTIONS
