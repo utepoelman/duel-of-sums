@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Duel of Sums - Card Game</title>
+  <!-- MQTT OVER WEBSOCKETS CLIENT LIBRARY -->
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
   <style>
     /* BASE & RESPONSIVE LAYOUT */
     body { font-family: system-ui, sans-serif; padding: 12px; max-width: 1100px; margin: auto; line-height: 1.4; background: #f8fafc; color: #1e293b; }
@@ -260,16 +262,14 @@
   </div>
 
   <script>
-    // NETWORKING ENGINE: SSE (GAME DATA) + NATIVE WEBRTC (AUDIO)
-    let eventSource = null;
+    // NETWORKING ENGINE: MQTT OVER WEBSOCKETS (PORT 443)
+    let mqttClient = null;
     let isHost = false;
     let roomCode = '';
     let myName = '';
     let myId = '';
     let selectedOpponentId = null;
     let lobbyBots = [];
-    let sessionStartTime = 0;
-    let joinRetryTimer = null;
 
     // VOICE CHAT STATE
     let rtcPeerConn = null;
@@ -310,7 +310,7 @@
       const roomParam = urlParams.get('room');
       if (roomParam) {
         document.getElementById('joinCodeInput').value = roomParam;
-        setStatus('🚀 Room link loaded (' + roomParam + ')! Enter your name and click Join Game.');
+        setStatus('🚀 Room ' + roomParam + ' loaded! Type your name and click Join Game.');
       }
     });
 
@@ -332,54 +332,61 @@
       });
     }
 
-    // --- CLOUD SSE NETWORK ENGINE ---
+    // --- HIGH-SPEED MQTT OVER WEBSOCKETS NETWORK ENGINE ---
     function initNetworkSession(onReady) {
       myId = (isHost ? 'host-' : 'guest-') + Math.random().toString(36).substr(2, 6);
-      sessionStartTime = Math.floor(Date.now() / 1000);
 
-      if (eventSource) {
-        eventSource.close();
+      if (mqttClient) {
+        try { mqttClient.end(); } catch(e){}
       }
 
-      const streamUrl = 'https://ntfy.sh/duel-sums-v5-' + roomCode + '/sse';
-      eventSource = new EventSource(streamUrl);
+      setStatus('Connecting to high-speed game server...');
 
-      eventSource.onopen = () => {
-        onReady();
-      };
+      // Connect to public high-availability MQTT WebSocket broker (Port 443 WSS)
+      mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+        clientId: 'duel_' + myId + '_' + Math.random().toString(36).substr(2, 4),
+        clean: true,
+        connectTimeout: 6000,
+        keepalive: 30
+      });
 
-      eventSource.onmessage = (event) => {
+      mqttClient.on('connect', () => {
+        const topic = 'duel-sums-v6/' + roomCode;
+        mqttClient.subscribe(topic, { qos: 0 }, (err) => {
+          if (!err) {
+            setStatus('Connected to room ' + roomCode + '!');
+            onReady();
+          }
+        });
+      });
+
+      mqttClient.on('message', (topic, payload) => {
         try {
-          const raw = JSON.parse(event.data);
-          
-          // FILTER OUT CACHED STALE MESSAGES FROM PREVIOUS GAME SESSIONS
-          if (raw.time && raw.time < sessionStartTime - 4) return;
-          if (!raw.message) return;
-
-          const data = JSON.parse(raw.message);
+          const data = JSON.parse(payload.toString());
           if (data.senderId === myId) return; // Ignore self-echoes
-
           handleIncomingData(data);
         } catch (e) {
-          // Ignore non-JSON system broadcasts
+          console.error('Network JSON error:', e);
         }
-      };
+      });
 
-      eventSource.onerror = () => {
-        setStatus('⚠️ Reconnecting to server stream...');
-      };
+      mqttClient.on('error', (err) => {
+        setStatus('⚠️ Server connecting error. Retrying...');
+      });
+
+      mqttClient.on('offline', () => {
+        setStatus('⚠️ Connection lost. Reconnecting...');
+      });
     }
 
     function sendNetworkMessage(dataObj) {
+      if (!mqttClient || !mqttClient.connected) return;
       dataObj.senderId = myId;
-      fetch('https://ntfy.sh/duel-sums-v5-' + roomCode, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(dataObj)
-      }).catch(err => console.error('Network send error:', err));
+      const topic = 'duel-sums-v6/' + roomCode;
+      mqttClient.publish(topic, JSON.stringify(dataObj), { qos: 0 });
     }
 
-    // --- VOICE CHAT ENGINE (WebRTC signaling via SSE) ---
+    // --- VOICE CHAT ENGINE (WebRTC signaling via MQTT) ---
     async function toggleVoiceChat() {
       const voiceBtn = document.getElementById('voiceBtn');
       if (!localAudioStream) {
@@ -509,10 +516,7 @@
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
 
-      setStatus('Creating global room code ' + roomCode + '...');
-
       initNetworkSession(async () => {
-        setStatus('Room created! Code: ' + roomCode);
         initializeMasterDeck();
         dealCardsToPlayer(myId, myName, true, false, 'easy');
 
@@ -529,7 +533,7 @@
       });
     });
 
-    // --- 2. JOIN A GAME WITH AUTO-RETRY ---
+    // --- 2. JOIN A GAME ---
     document.getElementById('joinBtn').addEventListener('click', () => {
       const inputCode = document.getElementById('joinCodeInput').value.trim();
       if (!inputCode) return alert('Please enter room code');
@@ -538,39 +542,19 @@
       isHost = false;
       roomCode = inputCode;
 
-      if (joinRetryTimer) clearInterval(joinRetryTimer);
-
-      setStatus('Connecting to room ' + roomCode + '...');
-
       initNetworkSession(() => {
-        setStatus('Requesting join from Host...');
-        
-        // AUTO-RETRY JOIN REQUEST EVERY 2.5 SECONDS UNTIL STATE IS RECEIVED
-        const sendJoinReq = () => {
-          sendNetworkMessage({
-            type: 'JOIN_REQUEST',
-            id: myId,
-            name: myName
-          });
-        };
-
-        sendJoinReq();
-
-        joinRetryTimer = setInterval(() => {
-          if (document.getElementById('game').style.display === 'block') {
-            clearInterval(joinRetryTimer);
-          } else {
-            setStatus('Retrying join connection...');
-            sendJoinReq();
-          }
-        }, 2500);
+        setStatus('Syncing with Host...');
+        sendNetworkMessage({
+          type: 'JOIN_REQUEST',
+          id: myId,
+          name: myName
+        });
       });
     });
 
     // --- INCOMING MESSAGE HANDLER ---
     function handleIncomingData(data) {
       if (data.type === 'STATE_UPDATE') {
-        if (joinRetryTimer) clearInterval(joinRetryTimer);
         gameState = data.state;
         if (!document.getElementById('game').style.display || document.getElementById('game').style.display === 'none') {
           showGameUI();
@@ -623,7 +607,7 @@
       let existingPlayer = gameState.players.find(p => p.id === playerId);
       if (existingPlayer) {
         existingPlayer.name = playerName;
-        return; // Already dealt cards
+        return;
       }
 
       const dealCount = Math.min(gameState.cardsPerPlayer, gameState.unusedDeck.length);
@@ -640,7 +624,7 @@
       });
     }
 
-    // --- 4. VISUALIZED RANDOM SELECTION (LOCAL ANIMATION ONLY TO AVOID NETWORK THROTTLING) ---
+    // --- 4. VISUALIZED RANDOM SELECTION ---
     async function animateRandomStarterSelection() {
       const activePlayers = gameState.players.filter(p => p.count > 0);
       if (activePlayers.length === 0) return;
@@ -654,7 +638,7 @@
         gameState.currentTurn = tempPlayer.id;
         gameState.statusMessage = '🎲 Selecting starting player: ' + tempPlayer.name + '...';
         
-        updateUI(); // Local UI render only during fast frames
+        updateUI();
         await delay(100);
       }
 
@@ -664,7 +648,7 @@
       gameState.isDueling = false;
       gameState.isSelectingStarter = false;
 
-      broadcastState(); // Single network broadcast when complete
+      broadcastState();
       updateUI();
     }
 
