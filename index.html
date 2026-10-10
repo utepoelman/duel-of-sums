@@ -38,8 +38,6 @@
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
     .btn-success { background: #16a34a; }
     .btn-success:hover { background: #15803d; }
-    .btn-voice { background: #8b5cf6; }
-    .btn-voice:hover { background: #7c3aed; }
     .btn-secondary { background: #64748b; }
     .op-btn { font-size: 1.5em; width: 54px; height: 54px; margin: 4px; border-radius: 8px; }
     
@@ -117,7 +115,7 @@
 
     <p style="margin: 14px 0;">— OR —</p>
 
-    <input type="text" id="joinCodeInput" placeholder="Enter room code" style="width: 180px; padding: 8px; font-size: 1em;">
+    <input type="text" id="joinCodeInput" placeholder="Enter 4-digit code" maxlength="4" style="width: 150px; padding: 8px; font-size: 1em;">
     <button id="joinBtn" class="btn">Join Game</button>
     
     <div id="lobbyStatusContainer" style="margin-top: 12px; padding: 10px; background: #f1f5f9; border-radius: 8px; font-size: 0.9em;">
@@ -136,7 +134,6 @@
       </div>
       <div><strong>You:</strong> <span id="displayName">--</span></div>
       <div>
-        <button id="voiceBtn" class="btn btn-voice" onclick="toggleVoiceChat()" style="padding: 4px 10px; font-size: 0.85em;">🎙️ Enable Voice</button>
         <span id="myCardsCount" class="badge">Cards: 0</span>
       </div>
     </div>
@@ -181,7 +178,6 @@
               <strong>Target Opponent:</strong> 
               <span id="selectedOpponentText" style="font-weight: bold; color: #0284c7;">Select a player below</span>
             </p>
-            <select id="opponentSelect" style="display: none;"></select>
             
             <p style="margin: 10px 0 6px 0; font-size: 0.95em;">Select Operation to Start Duel:</p>
             <button class="btn op-btn action-btn" onclick="issueChallenge('+')">+</button>
@@ -260,52 +256,14 @@
     </div>
   </div>
 
-  <!-- PEERJS CLIENT LIBRARY -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-
   <script>
-    // PEERJS WEBRTC RELAY & STUN/TURN CONFIG
-    const peerConfig = {
-      debug: 1,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:global.stun.twilio.com:3478' },
-          { urls: 'stun:openrelay.metered.ca:80' },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
-        ]
-      }
-    };
-
-    let peer = null;
+    // ZERO-DEPENDENCY NATIVE SSE NETWORKING ENGINE
+    let eventSource = null;
     let isHost = false;
     let roomCode = '';
     let myName = '';
     let myId = '';
     let selectedOpponentId = null;
-
-    let guestConnections = [];
-    let hostConnection = null;
-
-    // VOICE & BOT TRACKING
-    let localAudioStream = null;
-    let isMuted = false;
     let lobbyBots = [];
 
     const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -356,6 +314,48 @@
       });
     }
 
+    // --- CLOUD SSE NETWORK ENGINE ---
+    function initNetworkSession(onReady) {
+      myId = (isHost ? 'host-' : 'guest-') + Math.random().toString(36).substr(2, 6);
+      
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      const streamUrl = 'https://ntfy.sh/duel-sums-v4-' + roomCode + '/sse';
+      eventSource = new EventSource(streamUrl);
+
+      eventSource.onopen = () => {
+        onReady();
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const raw = JSON.parse(event.data);
+          if (!raw.message) return;
+          const data = JSON.parse(raw.message);
+          
+          if (data.senderId === myId) return; // Ignore self-echoes
+          handleIncomingData(data);
+        } catch (e) {
+          // Ignore non-JSON system broadcasts
+        }
+      };
+
+      eventSource.onerror = () => {
+        setStatus('⚠️ Reconnecting to server stream...');
+      };
+    }
+
+    function sendNetworkMessage(dataObj) {
+      dataObj.senderId = myId;
+      fetch('https://ntfy.sh/duel-sums-v4-' + roomCode, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(dataObj)
+      }).catch(err => console.error('Network send error:', err));
+    }
+
     // --- LOBBY BOT SETUP ---
     function addLobbyBot() {
       const diff = document.getElementById('botDiffSelect').value;
@@ -390,24 +390,15 @@
     document.getElementById('hostBtn').addEventListener('click', () => {
       myName = getEnteredName();
       isHost = true;
+      roomCode = Math.floor(1000 + Math.random() * 9000).toString();
 
       gameState.allowMult = document.getElementById('allowMult').checked;
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
 
-      setStatus('Creating room on PeerJS Cloud...');
+      setStatus('Creating global room code ' + roomCode + '...');
 
-      // Let PeerJS generate a clean unique global peer ID
-      peer = new Peer(peerConfig);
-
-      peer.on('error', (err) => {
-        setStatus('Host Error: ' + err.type + '. Please try again.');
-      });
-
-      peer.on('open', async (generatedId) => {
-        myId = generatedId;
-        roomCode = generatedId;
-
+      initNetworkSession(async () => {
         setStatus('Room created! Code: ' + roomCode);
         initializeMasterDeck();
         dealCardsToPlayer(myId, myName, true, false, 'easy');
@@ -418,47 +409,10 @@
 
         gameState.gameStarted = true;
 
-        setupMediaCallListener();
         showGameUI();
         updateUI();
 
         await animateRandomStarterSelection();
-      });
-
-      peer.on('connection', (conn) => {
-        let guestId = '';
-        let guestName = '';
-
-        conn.on('data', (data) => {
-          if (data.type === 'JOIN_REQUEST') {
-            guestId = data.id;
-            guestName = data.requestedName;
-
-            guestConnections.push({ conn, id: guestId, name: guestName });
-            dealCardsToPlayer(guestId, guestName, false, false, 'easy');
-
-            conn.send({ type: 'WELCOME', assignedName: guestName });
-
-            gameState.statusMessage = guestName + ' joined the game!';
-            broadcastState();
-            updateUI();
-          } 
-          else if (data.type === 'CHALLENGE_ACTION') {
-            handleDuel(data.challengerId, data.defenderId, data.operation);
-          }
-          else if (data.type === 'CHAT_MSG') {
-            appendChatMessage(data.sender, data.text);
-            broadcastData({ type: 'CHAT_BROADCAST', sender: data.sender, text: data.text });
-          }
-        });
-
-        conn.on('close', () => {
-          guestConnections = guestConnections.filter(g => g.id !== guestId);
-          gameState.players = gameState.players.filter(p => p.id !== guestId);
-          delete gameState.decks[guestId];
-          broadcastState();
-          updateUI();
-        });
       });
     });
 
@@ -471,48 +425,49 @@
       isHost = false;
       roomCode = inputCode;
 
-      setStatus('Registering guest client...');
+      setStatus('Connecting to room ' + roomCode + '...');
 
-      peer = new Peer(peerConfig);
-
-      peer.on('error', (err) => {
-        if (err.type === 'peer-not-found') {
-          setStatus('❌ Room code not found. Verify room code or ask host for direct link.');
-        } else {
-          setStatus('❌ Connection Error: ' + err.type);
-        }
-      });
-
-      peer.on('open', (guestGeneratedId) => {
-        myId = guestGeneratedId;
-        setStatus('Connecting to Host (' + roomCode + ')...');
-        setupMediaCallListener();
-
-        hostConnection = peer.connect(roomCode, { reliable: true });
-
-        hostConnection.on('open', () => {
-          setStatus('Connected! Syncing state...');
-          hostConnection.send({ type: 'JOIN_REQUEST', id: myId, requestedName: myName });
-          showGameUI();
-        });
-
-        hostConnection.on('data', (data) => {
-          if (data.type === 'WELCOME') {
-            myName = data.assignedName;
-            document.getElementById('displayName').innerText = myName;
-          } else if (data.type === 'STATE_UPDATE') {
-            gameState = data.state;
-            updateUI();
-          } else if (data.type === 'CHAT_BROADCAST') {
-            appendChatMessage(data.sender, data.text);
-          }
-        });
-
-        hostConnection.on('close', () => {
-          alert('Disconnected from Host.');
+      initNetworkSession(() => {
+        setStatus('Requesting join from Host...');
+        sendNetworkMessage({
+          type: 'JOIN_REQUEST',
+          id: myId,
+          name: myName
         });
       });
     });
+
+    // --- INCOMING MESSAGE HANDLER ---
+    function handleIncomingData(data) {
+      if (data.type === 'STATE_UPDATE') {
+        gameState = data.state;
+        if (!document.getElementById('game').style.display || document.getElementById('game').style.display === 'none') {
+          showGameUI();
+        }
+        updateUI();
+      }
+      else if (data.type === 'CHAT_BROADCAST') {
+        appendChatMessage(data.sender, data.text);
+      }
+      else if (isHost) {
+        // HOST PROCESSES CLIENT ACTIONS
+        if (data.type === 'JOIN_REQUEST') {
+          if (!gameState.players.some(p => p.id === data.id)) {
+            dealCardsToPlayer(data.id, data.name, false, false, 'easy');
+            gameState.statusMessage = data.name + ' joined the game!';
+            broadcastState();
+            updateUI();
+          }
+        }
+        else if (data.type === 'CHALLENGE_ACTION') {
+          handleDuel(data.challengerId, data.defenderId, data.operation);
+        }
+        else if (data.type === 'CHAT_MSG') {
+          appendChatMessage(data.sender, data.text);
+          sendNetworkMessage({ type: 'CHAT_BROADCAST', sender: data.sender, text: data.text });
+        }
+      }
+    }
 
     // --- 3. DECK GENERATION & DISTRIBUTION ---
     function initializeMasterDeck() {
@@ -541,7 +496,7 @@
       });
     }
 
-    // --- 4. VISUALIZED 2-SECOND RANDOM SELECTION ---
+    // --- 4. VISUALIZED RANDOM SELECTION ---
     async function animateRandomStarterSelection() {
       const activePlayers = gameState.players.filter(p => p.count > 0);
       if (activePlayers.length === 0) return;
@@ -814,7 +769,7 @@
       if (isHost) {
         handleDuel(myId, selectedOpponentId, op);
       } else {
-        hostConnection.send({
+        sendNetworkMessage({
           type: 'CHALLENGE_ACTION',
           challengerId: myId,
           defenderId: selectedOpponentId,
@@ -833,11 +788,9 @@
 
       if (isHost) {
         appendChatMessage(myName, text);
-        broadcastData({ type: 'CHAT_BROADCAST', sender: myName, text: text });
+        sendNetworkMessage({ type: 'CHAT_BROADCAST', sender: myName, text: text });
       } else {
-        if (hostConnection && hostConnection.open) {
-          hostConnection.send({ type: 'CHAT_MSG', sender: myName, text: text });
-        }
+        sendNetworkMessage({ type: 'CHAT_MSG', sender: myName, text: text });
       }
     }
 
@@ -850,69 +803,11 @@
       container.scrollTop = container.scrollHeight;
     }
 
-    // --- 9. VOICE CHAT SYSTEM ---
-    async function toggleVoiceChat() {
-      const voiceBtn = document.getElementById('voiceBtn');
-
-      if (!localAudioStream) {
-        try {
-          localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-          voiceBtn.innerText = '🎙️ Mute Voice';
-          voiceBtn.style.background = '#16a34a';
-
-          if (isHost) {
-            guestConnections.forEach(g => initiateAudioCall(g.conn.peer));
-          } else if (hostConnection) {
-            initiateAudioCall(hostConnection.peer);
-          }
-        } catch (err) {
-          alert('Could not access microphone: ' + err.message);
-        }
-      } else {
-        isMuted = !isMuted;
-        localAudioStream.getAudioTracks()[0].enabled = !isMuted;
-        voiceBtn.innerText = isMuted ? '🔇 Unmuted' : '🎙️ Mute Voice';
-        voiceBtn.style.background = isMuted ? '#ef4444' : '#16a34a';
-      }
-    }
-
-    function setupMediaCallListener() {
-      peer.on('call', (call) => {
-        call.answer(localAudioStream || null);
-        call.on('stream', (remoteStream) => playRemoteAudio(call.peer, remoteStream));
-      });
-    }
-
-    function initiateAudioCall(targetPeerId) {
-      if (!peer || !localAudioStream) return;
-      const call = peer.call(targetPeerId, localAudioStream);
-      call.on('stream', (remoteStream) => playRemoteAudio(targetPeerId, remoteStream));
-    }
-
-    function playRemoteAudio(peerId, stream) {
-      let audioEl = document.getElementById('audio-' + peerId);
-      if (!audioEl) {
-        audioEl = document.createElement('audio');
-        audioEl.id = 'audio-' + peerId;
-        audioEl.autoplay = true;
-        document.body.appendChild(audioEl);
-      }
-      audioEl.srcObject = stream;
-    }
-
     function broadcastState() {
-      broadcastData({ type: 'STATE_UPDATE', state: gameState });
+      sendNetworkMessage({ type: 'STATE_UPDATE', state: gameState });
     }
 
-    function broadcastData(data) {
-      guestConnections.forEach(g => {
-        if (g.conn.open) {
-          g.conn.send(data);
-        }
-      });
-    }
-
-    // --- 10. UI RENDER HELPERS ---
+    // --- 9. UI RENDER HELPERS ---
     function showGameUI() {
       document.getElementById('lobby').style.display = 'none';
       document.getElementById('game').style.display = 'block';
