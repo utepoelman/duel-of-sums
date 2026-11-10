@@ -429,6 +429,7 @@
       currentTurn: '',
       duelStage: 'IDLE', // 'IDLE', 'WAITING_DEFENDER_CARD', 'DUELING'
       pendingDuel: null, // { challengerId, defenderId, op, tableCards }
+      sidePot: [],       // Accumulated cards put to the side from draw(s)
       lastDuel: null,
       statusMessage: '',
       isDueling: false,
@@ -486,7 +487,7 @@
       });
 
       mqttClient.on('connect', () => {
-        const topic = 'duel-sums-v10/' + roomCode;
+        const topic = 'duel-sums-v11/' + roomCode;
         mqttClient.subscribe(topic, { qos: 0 }, (err) => {
           if (!err) {
             setStatus('Connected to room ' + roomCode + '!');
@@ -517,7 +518,7 @@
     function sendNetworkMessage(dataObj) {
       if (!mqttClient || !mqttClient.connected) return;
       dataObj.senderId = myId;
-      const topic = 'duel-sums-v10/' + roomCode;
+      const topic = 'duel-sums-v11/' + roomCode;
       mqttClient.publish(topic, JSON.stringify(dataObj), { qos: 0 });
     }
 
@@ -654,6 +655,7 @@
       gameState.eliminatedNotice = null;
       gameState.eliminatedPopupMsg = null;
       gameState.gameStarted = false;
+      gameState.sidePot = [];
 
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 5;
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
@@ -716,6 +718,9 @@
           showGameUI();
           updateUI();
         }
+      }
+      else if (data.type === 'TRIGGER_SPINNER') {
+        runSpinnerAnimation(data.winnerId);
       }
       else if (data.type === 'CHAT_BROADCAST') {
         appendChatMessage(data.sender, data.text);
@@ -832,7 +837,7 @@
       }
     }
 
-    // --- HOST STARTS GAME (TRIGGER SPINNER WHEEL) ---
+    // --- HOST STARTS GAME ---
     async function hostStartGame() {
       if (!isHost) return;
       if (gameState.players.length < 2) {
@@ -840,16 +845,21 @@
       }
 
       gameState.gameStarted = true;
-      broadcastState();
+      const activePlayers = gameState.players.filter(p => p.count > 0);
+      const winningIndex = Math.floor(Math.random() * activePlayers.length);
+      const winnerPlayer = activePlayers[winningIndex];
+
+      // Broadcast spinner event so ALL connected players see the spinner simultaneously
+      sendNetworkMessage({ type: 'TRIGGER_SPINNER', winnerId: winnerPlayer.id });
       
       showGameUI();
       updateUI();
 
-      await runSpinnerAnimation();
+      await runSpinnerAnimation(winnerPlayer.id);
     }
 
-    // --- ANIMATED SPINNER SELECTION WHEEL ---
-    async function runSpinnerAnimation() {
+    // --- ANIMATED SPINNER SELECTION WHEEL (SYNCHRONISED FOR ALL PLAYERS) ---
+    async function runSpinnerAnimation(targetWinnerId) {
       const overlay = document.getElementById('spinnerOverlay');
       const wheelDisplay = document.getElementById('wheelDisplay');
       overlay.style.display = 'flex';
@@ -858,10 +868,7 @@
       if (activePlayers.length === 0) return;
 
       gameState.isSelectingStarter = true;
-
-      // Select random starting player index
-      const winningIndex = Math.floor(Math.random() * activePlayers.length);
-      const winnerPlayer = activePlayers[winningIndex];
+      const targetPlayer = gameState.players.find(p => p.id === targetWinnerId) || activePlayers[0];
 
       const intervals = [60, 60, 60, 80, 80, 100, 120, 150, 200, 260, 340, 450, 600];
       let currIdx = 0;
@@ -872,7 +879,7 @@
         await delay(delayMs);
       }
 
-      wheelDisplay.innerText = winnerPlayer.name;
+      wheelDisplay.innerText = targetPlayer.name;
       wheelDisplay.style.borderColor = '#16a34a';
       wheelDisplay.style.color = '#15803d';
       wheelDisplay.style.background = '#f0fdf4';
@@ -887,12 +894,12 @@
       overlay.style.display = 'none';
 
       if (isHost) {
-        gameState.currentTurn = winnerPlayer.id;
-        gameState.statusMessage = '🎲 ' + winnerPlayer.name + ' was selected to challenge first!';
+        gameState.currentTurn = targetPlayer.id;
+        gameState.statusMessage = '🎲 ' + targetPlayer.name + ' was selected to challenge first!';
         gameState.isSelectingStarter = false;
 
         // Opponent selection default check
-        const validOpponents = gameState.players.filter(p => p.id !== winnerPlayer.id && p.count > 0);
+        const validOpponents = gameState.players.filter(p => p.id !== targetPlayer.id && p.count > 0);
         selectedOpponentId = validOpponents.length === 1 ? validOpponents[0].id : null;
         selectedOp = null;
 
@@ -911,6 +918,7 @@
       gameState.eliminatedPopupMsg = null;
       gameState.duelStage = 'IDLE';
       gameState.pendingDuel = null;
+      gameState.sidePot = [];
       victoryConfettiActive = false;
       selectedOpponentId = null;
       selectedOp = null;
@@ -928,10 +936,16 @@
         p.count = dealtCards.length;
       });
 
+      const activePlayers = gameState.players.filter(p => p.count > 0);
+      const winningIndex = Math.floor(Math.random() * activePlayers.length);
+      const winnerPlayer = activePlayers[winningIndex];
+
+      sendNetworkMessage({ type: 'TRIGGER_SPINNER', winnerId: winnerPlayer.id });
+
       broadcastState();
       updateUI();
 
-      await runSpinnerAnimation();
+      await runSpinnerAnimation(winnerPlayer.id);
     }
 
     // --- GAMEPLAY MOVE SELECTION FLOW ---
@@ -1004,11 +1018,14 @@
       const cCard = cDeck.shift();
       challenger.count = cDeck.length;
 
+      // Combine previous tie cards (sidePot) with current round cards
+      const currentTableCards = [...(gameState.sidePot || []), cCard];
+
       gameState.pendingDuel = { 
         challengerId, 
         defenderId, 
         op: operation,
-        tableCards: [cCard]
+        tableCards: currentTableCards
       };
       gameState.duelStage = 'WAITING_DEFENDER_CARD';
 
@@ -1050,6 +1067,7 @@
       let dDeck = gameState.decks[defenderId];
 
       const defenderPlayer = gameState.players.find(p => p.id === defenderId);
+      const challengerPlayer = gameState.players.find(p => p.id === challengerId);
 
       if (!dDeck || dDeck.length === 0) {
         gameState.isDueling = false;
@@ -1063,39 +1081,76 @@
       defenderPlayer.count = dDeck.length;
       tableCards.push(dCard);
 
-      const challengerPlayer = gameState.players.find(p => p.id === challengerId);
       const challengerName = challengerPlayer.name;
       const defenderName = defenderPlayer.name;
 
-      const cCard = tableCards[0];
+      // The active card pair for calculation is the last challenger card drawn & this defender card
+      const cCard = tableCards[tableCards.length - 2];
       const cScore = evaluateCard(cCard, op);
       const dScore = evaluateCard(dCard, op);
 
+      let isDraw = false;
       let winnerId = null;
+
       if (cScore > dScore) {
         winnerId = challengerId;
       } else if (dScore > cScore) {
         winnerId = defenderId;
       } else {
-        winnerId = cScore >= dScore ? challengerId : defenderId;
+        // TIE / DRAW DETECTED!
+        isDraw = true;
       }
 
-      const winnerName = gameState.players.find(p => p.id === winnerId).name;
+      // Check if someone runs out of cards during a tie
+      let cCanPlay = cDeck.length > 0;
+      let dCanPlay = dDeck.length > 0;
 
-      // Immediately show defender's card, scores, and winner outcome comment
-      gameState.lastDuel = {
-        cName: challengerName,
-        dName: defenderName,
-        op: op,
-        cCard: cCard,
-        dCard: dCard,
-        cScore: cScore,
-        dScore: dScore,
-        winnerName: winnerName,
-        statusText: '🎉 ' + winnerName + ' wins the duel! Both cards will be added to ' + winnerName + '\'s stack.'
-      };
+      if (isDraw) {
+        if (!cCanPlay && dCanPlay) {
+          // Challenger has run out of cards -> Defender wins by default!
+          winnerId = defenderId;
+          isDraw = false;
+        } else if (!dCanPlay && cCanPlay) {
+          // Defender has run out of cards -> Challenger wins by default!
+          winnerId = challengerId;
+          isDraw = false;
+        } else if (!cCanPlay && !dCanPlay) {
+          // Both out of cards (fallback: challenger gets pot)
+          winnerId = challengerId;
+          isDraw = false;
+        }
+      }
 
-      gameState.statusMessage = winnerName + ' won the duel! Cards moving to ' + winnerName + '\'s stack...';
+      const winnerName = winnerId ? gameState.players.find(p => p.id === winnerId).name : null;
+
+      // Render duel outcomes
+      if (isDraw) {
+        gameState.lastDuel = {
+          cName: challengerName,
+          dName: defenderName,
+          op: op,
+          cCard: cCard,
+          dCard: dCard,
+          cScore: cScore,
+          dScore: dScore,
+          winnerName: null,
+          statusText: '🤝 IT\'S A DRAW (' + cScore + ' = ' + dScore + ')! Cards placed to the side. ' + challengerName + ' and ' + defenderName + ' must duel again!'
+        };
+        gameState.statusMessage = '🤝 DRAW! Cards put to the side. Duel again to resolve!';
+      } else {
+        gameState.lastDuel = {
+          cName: challengerName,
+          dName: defenderName,
+          op: op,
+          cCard: cCard,
+          dCard: dCard,
+          cScore: cScore,
+          dScore: dScore,
+          winnerName: winnerName,
+          statusText: '🎉 ' + winnerName + ' wins the duel! All ' + tableCards.length + ' cards will be added to ' + winnerName + '\'s stack.'
+        };
+        gameState.statusMessage = winnerName + ' won the duel! ' + tableCards.length + ' cards moving to ' + winnerName + '\'s stack...';
+      }
 
       broadcastState();
       updateUI();
@@ -1103,12 +1158,34 @@
       // DOUBLED DELAY: Cards remain visible for 4 seconds (4000ms) after completion
       await delay(4000);
 
-      // Cards disappear after 4 seconds and are added to the winner's deck
+      // RESOLVE TIE vs DECISIVE WIN
+      if (isDraw) {
+        // Store table cards in sidePot and prepare for immediate tiebreaker duel with SAME ROLES!
+        gameState.sidePot = [...tableCards];
+        gameState.lastDuel = null;
+        gameState.currentTurn = challengerId;
+        gameState.duelStage = 'IDLE';
+        gameState.pendingDuel = null;
+        gameState.isDueling = false;
+
+        // Keep challenger locked onto defender
+        selectedOpponentId = defenderId;
+        selectedOp = null;
+
+        gameState.statusMessage = '🤝 DRAW! ' + challengerName + ', select an operation and click your top card to resolve the tie!';
+
+        broadcastState();
+        updateUI();
+        return;
+      }
+
+      // DECISIVE WIN RESOLUTION
       gameState.decks[winnerId].push(...tableCards);
       const winnerPlayerObj = gameState.players.find(p => p.id === winnerId);
       winnerPlayerObj.count = gameState.decks[winnerId].length;
 
-      gameState.lastDuel = null; // Remove duel info from display!
+      gameState.sidePot = []; // Clear side pot
+      gameState.lastDuel = null; // Clear duel display after 4s
 
       let newlyEliminated = [];
       gameState.players.forEach(p => {
@@ -1192,13 +1269,18 @@
         // 1-second delay for bot decisions
         await delay(1000);
 
+        // If in a tie sequence, force bot to target the existing defender
+        let targetId = selectedOpponentId;
         const validTargets = gameState.players.filter(p => p.id !== activePlayer.id && p.count > 0);
-        if (validTargets.length === 0) {
-          gameState.isDueling = false;
-          return;
+        
+        if (!targetId || !validTargets.some(p => p.id === targetId)) {
+          if (validTargets.length === 0) {
+            gameState.isDueling = false;
+            return;
+          }
+          targetId = validTargets[Math.floor(Math.random() * validTargets.length)].id;
         }
 
-        const target = validTargets[Math.floor(Math.random() * validTargets.length)];
         const botDeck = gameState.decks[activePlayer.id];
         if (!botDeck || botDeck.length === 0) {
           gameState.isDueling = false;
@@ -1212,7 +1294,7 @@
           : ops[Math.floor(Math.random() * ops.length)];
 
         gameState.isDueling = false;
-        stageChallenge(activePlayer.id, target.id, chosenOp);
+        stageChallenge(activePlayer.id, targetId, chosenOp);
       }
     }
 
@@ -1519,7 +1601,7 @@
         document.getElementById('dCard').innerHTML = '<div class="card card-back">?</div>';
         document.getElementById('cScore').innerText = '';
         document.getElementById('dScore').innerText = '';
-        document.getElementById('duelOutcome').innerText = 'No duels in progress';
+        document.getElementById('duelOutcome').innerText = gameState.sidePot && gameState.sidePot.length > 0 ? '🤝 Tie in progress (' + gameState.sidePot.length + ' cards in pot)' : 'No duels in progress';
       }
 
       // Host Bot check
