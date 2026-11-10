@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-NZ">
 <head>
-<!-- © Ute Poelman. All rights reserved. Terms of use: https://nugget-maths.co.nz/#terms -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Duel of Sums - Card Game</title>
   <!-- MQTT OVER WEBSOCKETS CLIENT LIBRARY -->
   <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <!-- CANVAS CONFETTI LIBRARY -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
   <style>
     /* BASE & RESPONSIVE LAYOUT */
     body { font-family: system-ui, sans-serif; padding: 12px; max-width: 1100px; margin: auto; line-height: 1.4; background: #f8fafc; color: #1e293b; }
@@ -25,27 +26,47 @@
     /* HEADER BAR */
     .top-bar { display: flex; justify-content: space-between; align-items: center; background: #f1f5f9; padding: 10px 16px; border-radius: 10px; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; font-size: 1.05em; }
     
-    /* CARD STYLING */
-    .card { display: inline-block; width: 85px; height: 125px; border: 3px solid #0284c7; border-radius: 10px; background: #f0f9ff; text-align: center; font-weight: bold; margin: 4px; vertical-align: middle; box-shadow: 0 4px 8px rgba(0,0,0,0.08); }
+    /* CARD STYLING & PULSE ANIMATION */
+    .card { display: inline-block; width: 85px; height: 125px; border: 3px solid #0284c7; border-radius: 10px; background: #f0f9ff; text-align: center; font-weight: bold; margin: 4px; vertical-align: middle; box-shadow: 0 4px 8px rgba(0,0,0,0.08); user-select: none; transition: transform 0.15s ease, box-shadow 0.15s ease; }
     .card .top { font-size: 1.8em; color: #0369a1; border-bottom: 2px solid #bae6fd; padding-top: 8px; }
     .card .bot { font-size: 1.3em; color: #64748b; padding-top: 6px; }
 
     .card.mini { width: 62px; height: 90px; font-size: 0.85em; border-width: 2px; border-color: #94a3b8; background: #ffffff; }
     .card.mini .top { font-size: 1.3em; padding-top: 5px; border-bottom-width: 1px; }
-    .card.mini .bot { font-size: 1em; padding-top: 4px; }
+    .card.mini .bot { font-size: 1.3em; padding-top: 4px; }
 
     .card.card-back { background: #e2e8f0; border-color: #cbd5e1; color: #94a3b8; display: inline-flex; align-items: center; justify-content: center; font-size: 2.2em; }
 
+    /* Interactive Top Card Pulsing */
+    .card-clickable-pulse {
+      cursor: pointer !important;
+      border-color: #16a34a !important;
+      background: #f0fdf4 !important;
+      animation: pulseGlow 1.2s infinite alternate ease-in-out;
+    }
+    .card-clickable-pulse:hover {
+      transform: scale(1.06);
+    }
+
+    @keyframes pulseGlow {
+      0% { box-shadow: 0 0 4px #22c55e; }
+      100% { box-shadow: 0 0 16px #16a34a, 0 0 24px #4ade80; }
+    }
+
     /* UI BUTTONS & CONTROLS */
-    .btn { padding: 10px 20px; margin: 4px; cursor: pointer; border-radius: 8px; border: none; background: #0284c7; color: white; font-weight: bold; font-size: 0.95em; }
+    .btn { padding: 10px 20px; margin: 4px; cursor: pointer; border-radius: 8px; border: none; background: #0284c7; color: white; font-weight: bold; font-size: 0.95em; transition: background 0.15s; }
+    .btn:hover { background: #0369a1; }
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
     .btn-success { background: #16a34a; }
     .btn-success:hover { background: #15803d; }
     .btn-voice { background: #8b5cf6; }
     .btn-voice:hover { background: #7c3aed; }
     .btn-secondary { background: #64748b; }
-    .op-btn { font-size: 1.5em; width: 54px; height: 54px; margin: 4px; border-radius: 8px; }
-    
+    .btn-secondary:hover { background: #475569; }
+
+    .op-btn { font-size: 1.5em; width: 54px; height: 54px; margin: 4px; border-radius: 8px; border: 2px solid #cbd5e1; background: #ffffff; color: #1e293b; }
+    .op-btn.selected { background: #0284c7; color: white; border-color: #0369a1; box-shadow: 0 0 0 3px #bae6fd; }
+
     /* PLAYER TAGS */
     .player-tag { display: inline-block; background: #e2e8f0; padding: 7px 14px; border-radius: 16px; margin: 4px; font-size: 0.95em; font-weight: 500; transition: all 0.2s ease; border: 2px solid transparent; }
     .player-tag.selectable { cursor: pointer; border-color: #0284c7; background: #f0f9ff; color: #0369a1; }
@@ -69,15 +90,20 @@
     /* CHAT PANEL */
     .chat-box { margin-top: 16px; background: #f8fafc; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; }
     .chat-messages { height: 110px; overflow-y: auto; background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; font-size: 0.88em; margin-bottom: 8px; }
+
+    /* MODAL OVERLAY */
+    .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.75); display: flex; align-items: center; justify-content: center; z-index: 999; backdrop-filter: blur(4px); }
+    .modal-card { background: white; border-radius: 16px; padding: 30px; text-align: center; max-width: 440px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); border: 3px solid #0284c7; }
+    .wheel-display { font-size: 1.8em; font-weight: bold; color: #0284c7; padding: 20px; background: #f0f9ff; border: 2px dashed #0284c7; border-radius: 12px; margin: 16px 0; min-height: 40px; display: flex; align-items: center; justify-content: center; }
   </style>
 </head>
 <body>
 
   <h2>⚔️ Duel of Sums</h2>
 
-  <!-- LOBBY SCREEN -->
-  <div id="lobby" class="box">
-    <h3>Game Lobby</h3>
+  <!-- 1. FULL SETUP LOBBY SCREEN -->
+  <div id="lobbySetup" class="box">
+    <h3>Create or Join Game</h3>
     <label for="playerNameInput"><strong>Your Name:</strong></label><br>
     <input type="text" id="playerNameInput" placeholder="e.g. Alex" style="width: 220px; padding: 8px; margin: 6px 0 16px 0; font-size: 1em;">
     
@@ -86,8 +112,8 @@
     <div id="hostControls">
       <h4>Host Setup Options</h4>
       <p style="margin: 6px 0;">
-        <label><strong>Cards Deals Per Player:</strong> 
-          <input type="number" id="cardsPerPlayerInput" value="12" min="1" max="25" style="width: 60px; padding: 6px; font-size: 0.95em;">
+        <label><strong>Cards Dealt Per Player:</strong> 
+          <input type="number" id="cardsPerPlayerInput" value="5" min="1" max="25" style="width: 60px; padding: 6px; font-size: 0.95em;">
         </label>
       </p>
       <p style="margin: 6px 0;">
@@ -103,19 +129,15 @@
         <label><input type="checkbox" id="allowMult" checked> Include Multiplication (×)</label>
       </p>
       
-      <!-- ADD COMPUTER PLAYERS IN LOBBY -->
+      <!-- OPTIONAL CHAT & VOICE SETTINGS -->
       <div style="background: #f1f5f9; padding: 10px; border-radius: 8px; margin: 10px 0;">
-        <strong>🤖 Add Computer Players (AI):</strong><br>
-        <select id="botDiffSelect" style="padding: 6px; font-size: 0.9em; margin-top: 4px;">
-          <option value="easy">Easy (Random Operations)</option>
-          <option value="hard">Strategic (Smart Operations)</option>
-        </select>
-        <button type="button" class="btn btn-secondary" onclick="addLobbyBot()" style="padding: 6px 12px; font-size: 0.88em;">+ Add AI Bot</button>
-        <div id="lobbyBotList" style="margin-top: 6px;"></div>
+        <strong>⚙️ Feature Options:</strong><br>
+        <label style="margin-right: 14px;"><input type="checkbox" id="enableChatInput" checked> Enable In-App Chat</label>
+        <label><input type="checkbox" id="enableVoiceInput" checked> Enable Voice Ability</label>
       </div>
 
       <br>
-      <button id="hostBtn" class="btn">Host New Game</button>
+      <button id="hostBtn" class="btn btn-success">Create Game Room</button>
     </div>
 
     <p style="margin: 14px 0;">— OR —</p>
@@ -128,7 +150,92 @@
     </div>
   </div>
 
-  <!-- GAMEPLAY SCREEN -->
+  <!-- 2. DIRECT JOIN SCREEN (SHOWN WHEN OPENED VIA LINK) -->
+  <div id="directJoinScreen" class="box" style="display: none;">
+    <h3>⚔️ Invited to Join Game</h3>
+    <p style="font-size: 1.05em; color: #0284c7;">
+      You have been invited to join room: <strong id="directRoomCodeDisplay">----</strong>
+    </p>
+    <label for="directPlayerNameInput"><strong>Enter Your Name:</strong></label><br>
+    <input type="text" id="directPlayerNameInput" placeholder="e.g. Sam" style="width: 240px; padding: 8px; margin: 8px 0 16px 0; font-size: 1em;"><br>
+    <button id="directJoinBtn" class="btn btn-success" onclick="joinGameDirect()">Join Room</button>
+  </div>
+
+  <!-- 3. WAITING ROOM SCREEN -->
+  <div id="waitingRoom" class="box" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <h3>🚪 Game Waiting Room</h3>
+      <div>
+        <strong style="font-size: 1.1em; color: #0284c7;">Room Code: <span id="waitingCodeDisplay">----</span></strong>
+        <button class="btn btn-secondary" onclick="copyInviteLink()" style="padding: 4px 10px; font-size: 0.85em; margin-left: 8px;">📋 Copy Invite Link</button>
+      </div>
+    </div>
+    
+    <hr style="margin: 12px 0;">
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+      <div>
+        <h4>Connected Players (<span id="waitingPlayerCount">0</span>)</h4>
+        <div id="waitingPlayerList" style="min-height: 80px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;"></div>
+      </div>
+
+      <div>
+        <h4>Game Configuration</h4>
+        <ul style="margin: 0; padding-left: 20px; font-size: 0.95em; color: #475569;">
+          <li>Cards per player: <strong id="cfgCards">5</strong></li>
+          <li>Max card number: <strong id="cfgMaxNum">12</strong></li>
+          <li>Multiplication: <strong id="cfgMult">Yes</strong></li>
+          <li>In-App Chat: <strong id="cfgChat">Enabled</strong></li>
+          <li>Voice Ability: <strong id="cfgVoice">Enabled</strong></li>
+        </ul>
+
+        <!-- ADD COMPUTER PLAYERS IN LOBBY -->
+        <div id="botAddSection" style="background: #f1f5f9; padding: 10px; border-radius: 8px; margin-top: 12px;">
+          <strong>🤖 Add Computer Players (AI):</strong><br>
+          <select id="botDiffSelect" style="padding: 6px; font-size: 0.9em; margin-top: 4px;">
+            <option value="easy">Easy (Random Operations)</option>
+            <option value="hard">Strategic (Smart Operations)</option>
+          </select>
+          <button type="button" class="btn btn-secondary" onclick="addLobbyBot()" style="padding: 6px 12px; font-size: 0.88em;">+ Add AI Bot</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 20px; text-align: center;" id="waitingRoomActionArea">
+      <!-- HOST OR GUEST BUTTONS RENDERED DYNAMICALLY -->
+    </div>
+  </div>
+
+  <!-- 4. SPINNER OVERLAY FOR RANDOM STARTER SELECTION -->
+  <div id="spinnerOverlay" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <h3 style="margin: 0; color: #0f172a;">🎲 Choosing Starting Player...</h3>
+      <div id="wheelDisplay" class="wheel-display">Selecting...</div>
+      <p id="spinnerSubtext" style="color: #64748b; font-size: 0.9em; margin: 0;">Randomising turn order for all players</p>
+    </div>
+  </div>
+
+  <!-- 5. ELIMINATION POPUP MODAL -->
+  <div id="eliminationModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="border-color: #ef4444;">
+      <div style="font-size: 3em; margin-bottom: 6px;">💀</div>
+      <h3 style="margin: 0; color: #991b1b; font-size: 1.5em;">Player Eliminated!</h3>
+      <p id="eliminationModalText" style="font-size: 1.1em; color: #1e293b; margin: 16px 0; font-weight: bold;"></p>
+      <button class="btn btn-secondary" onclick="closeEliminationModal()">Dismiss</button>
+    </div>
+  </div>
+
+  <!-- 6. CELEBRATION VICTORY POPUP MODAL WITH CONFETTI -->
+  <div id="victoryModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="border-color: #eab308; background: linear-gradient(135deg, #ffffff, #fef9c3);">
+      <div style="font-size: 3.5em; margin-bottom: 6px;">🏆</div>
+      <h2 style="margin: 0; color: #854d0e; font-size: 1.8em;">VICTORY CELEBRATION!</h2>
+      <p id="victoryModalText" style="font-size: 1.2em; color: #713f12; margin: 16px 0; font-weight: bold;"></p>
+      <button class="btn btn-success" onclick="closeVictoryModal()" style="font-size: 1em; padding: 10px 24px;">Awesome!</button>
+    </div>
+  </div>
+
+  <!-- 7. GAMEPLAY SCREEN -->
   <div id="game" class="box" style="display: none;">
     
     <!-- TOP STATUS BAR -->
@@ -139,7 +246,7 @@
       </div>
       <div><strong>You:</strong> <span id="displayName">--</span></div>
       <div>
-        <button id="voiceBtn" class="btn btn-voice" onclick="toggleVoiceChat()" style="padding: 4px 10px; font-size: 0.85em;">🎙️ Enable Voice</button>
+        <button id="voiceBtn" class="btn btn-voice" onclick="toggleVoiceChat()" style="padding: 4px 10px; font-size: 0.85em; display: none;">🎙️ Enable Voice</button>
         <span id="myCardsCount" class="badge">Cards: 0</span>
       </div>
     </div>
@@ -178,19 +285,34 @@
 
         <!-- CONTROLS PANEL -->
         <div id="controlsContainer" style="margin-top: 14px;">
+          
+          <!-- CHALLENGER CONTROLS PANEL -->
           <div id="challengerPanel" style="display: none; background: #f0fdf4; padding: 16px; border-radius: 10px; border: 1px solid #bbf7d0;">
             <h4 style="margin: 0 0 10px 0; color: #15803d; font-size: 1.1em;">⚔️ Your Turn to Challenge!</h4>
             <p style="margin: 4px 0; font-size: 1em;">
-              <strong>Target Opponent:</strong> 
+              <strong>Step 1 - Select Opponent:</strong> 
               <span id="selectedOpponentText" style="font-weight: bold; color: #0284c7;">Select a player below</span>
             </p>
             
-            <p style="margin: 10px 0 6px 0; font-size: 0.95em;">Select Operation to Start Duel:</p>
-            <button class="btn op-btn action-btn" onclick="issueChallenge('+')">+</button>
-            <button class="btn op-btn action-btn" onclick="issueChallenge('-')">-</button>
-            <button class="btn op-btn action-btn" id="multBtn" onclick="issueChallenge('x')">×</button>
+            <p style="margin: 10px 0 6px 0; font-size: 0.95em;"><strong>Step 2 - Select Operation:</strong></p>
+            <button class="btn op-btn action-btn" id="opPlusBtn" onclick="selectOperation('+')">+</button>
+            <button class="btn op-btn action-btn" id="opMinusBtn" onclick="selectOperation('-')">-</button>
+            <button class="btn op-btn action-btn" id="opMultBtn" onclick="selectOperation('x')">×</button>
+
+            <div id="challengerActionPrompt" style="margin-top: 12px; padding: 10px; background: #dcfce7; border-radius: 8px; border: 1px solid #86efac; color: #14532d; font-weight: bold; display: none;">
+              👉 Step 3: Now CLICK YOUR TOP CARD on the right to make your move!
+            </div>
           </div>
 
+          <!-- DEFENDER CONTROLS PANEL -->
+          <div id="defenderPanel" style="display: none; background: #fff7ed; padding: 16px; border-radius: 10px; border: 2px solid #f97316;">
+            <h4 style="margin: 0 0 6px 0; color: #c2410c; font-size: 1.1em;">🛡️ YOU HAVE BEEN CHALLENGED!</h4>
+            <p id="defenderPromptText" style="margin: 4px 0; font-weight: bold; font-size: 1.05em; color: #ea580c;">
+              Click your top card on the right side of the screen to defend!
+            </p>
+          </div>
+
+          <!-- SPECTATOR CONTROLS PANEL -->
           <div id="spectatorPanel" style="display: none; background: #fefce8; padding: 16px; border-radius: 10px; border: 1px solid #fef08a;">
             <p id="statusMessage" style="margin: 0; font-weight: 500; color: #a16207; font-size: 1.05em;">Waiting for challenger...</p>
           </div>
@@ -204,8 +326,8 @@
           <div id="playerList"></div>
         </div>
 
-        <!-- CHAT PANEL -->
-        <div class="chat-box">
+        <!-- OPTIONAL CHAT PANEL -->
+        <div id="chatBoxContainer" class="chat-box" style="display: none;">
           <h4 style="margin: 0 0 6px 0; font-size: 0.95em; color: #475569;">💬 In-Game Chat</h4>
           <div id="chatMessages" class="chat-messages"></div>
           <div style="display: flex; gap: 6px;">
@@ -219,8 +341,8 @@
           <h4 style="margin: 0 0 8px 0; color: #15803d;">🛠️ Host Settings & Restart Controls</h4>
           <p style="font-size: 0.85em; color: #475569; margin: 0 0 10px 0;">Adjust settings below and start a new round for all connected players.</p>
           <p style="margin: 6px 0;">
-            <label><strong>Cards Deals Per Player:</strong> 
-              <input type="number" id="inGameCardsPerPlayer" value="12" min="1" max="25" style="width: 60px; padding: 4px; font-size: 0.95em;">
+            <label><strong>Cards Dealt Per Player:</strong> 
+              <input type="number" id="inGameCardsPerPlayer" value="5" min="1" max="25" style="width: 60px; padding: 4px; font-size: 0.95em;">
             </label>
           </p>
           <p style="margin: 6px 0;">
@@ -240,15 +362,18 @@
 
       </div>
 
-      <!-- RIGHT COLUMN: VERTICAL DECK INSPECTION -->
+      <!-- RIGHT COLUMN: VERTICAL DECK INSPECTION & CLICKABLE TOP CARD -->
       <div class="side-panel">
         <h4 style="margin: 0 0 10px 0; font-size: 1.1em;">Your Deck Inspection</h4>
         
         <div class="deck-column">
           <div class="sticky-top-card">
-            <span style="font-size: 0.75em; color: #0369a1; font-weight: bold; text-transform: uppercase;">Active Top Card</span>
-            <div id="topCardContainer" style="margin-top: 6px;">
+            <span style="font-size: 0.75em; color: #0369a1; font-weight: bold; text-transform: uppercase;" id="topCardHeaderLabel">Active Top Card</span>
+            <div id="topCardContainer" style="margin-top: 6px;" onclick="handleTopCardClick()">
               <em>No cards remaining</em>
+            </div>
+            <div id="topCardHint" style="font-size: 0.75em; color: #16a34a; font-weight: bold; margin-top: 4px; display: none;">
+              👆 CLICK TO MAKE MOVE!
             </div>
           </div>
 
@@ -270,7 +395,9 @@
     let myName = '';
     let myId = '';
     let selectedOpponentId = null;
+    let selectedOp = null;
     let lobbyBots = [];
+    let victoryConfettiActive = false;
 
     // VOICE CHAT STATE
     let rtcPeerConn = null;
@@ -289,34 +416,42 @@
 
     // MASTER GAME STATE
     let gameState = {
+      roomCode: '',
       players: [],
       decks: {},
       unusedDeck: [],
-      cardsPerPlayer: 12,
-      currentTurn: '',
-      statusMessage: '',
-      lastDuel: null,
-      allowMult: true,
+      cardsPerPlayer: 5,
       maxNum: 12,
+      allowMult: true,
+      enableChat: true,
+      enableVoice: true,
       gameStarted: false,
+      currentTurn: '',
+      duelStage: 'IDLE', // 'IDLE', 'WAITING_DEFENDER_CARD', 'DUELING'
+      pendingDuel: null, // { challengerId, defenderId, op, tableCards }
+      lastDuel: null,
+      statusMessage: '',
       isDueling: false,
       isSelectingStarter: false,
       eliminatedNotice: null,
+      eliminatedPopupMsg: null,
       winnerName: null
     };
 
-    // AUTO-FILL ROOM CODE FROM DIRECT URL
+    // AUTO-DETECT DIRECT JOIN LINK PARAMETER
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const roomParam = urlParams.get('room');
       if (roomParam) {
-        document.getElementById('joinCodeInput').value = roomParam;
-        setStatus('🚀 Room ' + roomParam + ' loaded! Type your name and click Join Game.');
+        roomCode = roomParam;
+        document.getElementById('lobbySetup').style.display = 'none';
+        document.getElementById('directJoinScreen').style.display = 'block';
+        document.getElementById('directRoomCodeDisplay').innerText = roomParam;
       }
     });
 
-    function getEnteredName() {
-      const input = document.getElementById('playerNameInput').value.trim();
+    function getEnteredName(inputId) {
+      const input = document.getElementById(inputId).value.trim();
       return input.length > 0 ? input : 'Player ' + Math.floor(100 + Math.random() * 900);
     }
 
@@ -327,7 +462,7 @@
     function copyInviteLink() {
       const shareUrl = window.location.origin + window.location.pathname + '?room=' + roomCode;
       navigator.clipboard.writeText(shareUrl).then(() => {
-        alert('📋 Direct link copied!\nSend this link to your friend so they can join directly.');
+        alert('📋 Direct join link copied to clipboard!\nShare this link with your friends to join directly:\n' + shareUrl);
       }).catch(() => {
         alert('Room Code: ' + roomCode);
       });
@@ -343,7 +478,6 @@
 
       setStatus('Connecting to high-speed game server...');
 
-      // Connect to public high-availability MQTT WebSocket broker (Port 443 WSS)
       mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
         clientId: 'duel_' + myId + '_' + Math.random().toString(36).substr(2, 4),
         clean: true,
@@ -352,7 +486,7 @@
       });
 
       mqttClient.on('connect', () => {
-        const topic = 'duel-sums-v6/' + roomCode;
+        const topic = 'duel-sums-v10/' + roomCode;
         mqttClient.subscribe(topic, { qos: 0 }, (err) => {
           if (!err) {
             setStatus('Connected to room ' + roomCode + '!');
@@ -383,11 +517,15 @@
     function sendNetworkMessage(dataObj) {
       if (!mqttClient || !mqttClient.connected) return;
       dataObj.senderId = myId;
-      const topic = 'duel-sums-v6/' + roomCode;
+      const topic = 'duel-sums-v10/' + roomCode;
       mqttClient.publish(topic, JSON.stringify(dataObj), { qos: 0 });
     }
 
-    // --- VOICE CHAT ENGINE (WebRTC signaling via MQTT) ---
+    function broadcastState() {
+      sendNetworkMessage({ type: 'STATE_UPDATE', state: gameState });
+    }
+
+    // --- VOICE CHAT ENGINE ---
     async function toggleVoiceChat() {
       const voiceBtn = document.getElementById('voiceBtn');
       if (!localAudioStream) {
@@ -440,14 +578,13 @@
     }
 
     async function handleVoiceOffer(offer) {
+      if (!gameState.enableVoice) return;
       if (!localAudioStream) {
         try {
           localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
           document.getElementById('voiceBtn').innerText = '🎙️ Mute Voice';
           document.getElementById('voiceBtn').style.background = '#16a34a';
-        } catch(e) {
-          console.warn("Audio mic prompt bypassed or declined by user.");
-        }
+        } catch(e) {}
       }
       createVoicePeerConnection();
       await rtcPeerConn.setRemoteDescription(new RTCSessionDescription(offer));
@@ -466,7 +603,7 @@
       if (rtcPeerConn && candidate) {
         try {
           await rtcPeerConn.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch(e) { console.error('ICE Candidate Error:', e); }
+        } catch(e) {}
       }
     }
 
@@ -474,72 +611,72 @@
     function addLobbyBot() {
       const diff = document.getElementById('botDiffSelect').value;
       const botNum = lobbyBots.length + 1;
+      const botId = 'bot-' + Math.random().toString(36).substr(2, 5);
       const botName = 'Bot ' + botNum + ' (' + (diff === 'hard' ? 'Smart' : 'Easy') + ')';
-      lobbyBots.push({
-        id: 'bot-' + Math.random().toString(36).substr(2, 5),
+      
+      const botObj = {
+        id: botId,
         name: botName,
         isBot: true,
         difficulty: diff
-      });
-      renderLobbyBots();
+      };
+      
+      lobbyBots.push(botObj);
+
+      if (isHost) {
+        dealCardsToPlayer(botId, botName, false, true, diff);
+        broadcastState();
+        updateWaitingRoomUI();
+      }
     }
 
     function removeLobbyBot(id) {
       lobbyBots = lobbyBots.filter(b => b.id !== id);
-      renderLobbyBots();
+      if (isHost) {
+        gameState.players = gameState.players.filter(p => p.id !== id);
+        delete gameState.decks[id];
+        broadcastState();
+        updateWaitingRoomUI();
+      }
     }
 
-    function renderLobbyBots() {
-      const container = document.getElementById('lobbyBotList');
-      container.innerHTML = '';
-      lobbyBots.forEach(b => {
-        const span = document.createElement('span');
-        span.className = 'player-tag';
-        span.innerHTML = '🤖 ' + b.name + ' <a href="#" onclick="removeLobbyBot(\'' + b.id + '\'); return false;" style="color:#ef4444; font-weight:bold; margin-left:4px;">×</a>';
-        container.appendChild(span);
-      });
-    }
-
-    // --- 1. HOST A GAME ---
+    // --- HOST GAME SETUP ---
     document.getElementById('hostBtn').addEventListener('click', () => {
-      myName = getEnteredName();
+      myName = getEnteredName('playerNameInput');
       isHost = true;
       roomCode = Math.floor(1000 + Math.random() * 9000).toString();
 
-      // CLEAR PREVIOUS PLAYERS
+      gameState.roomCode = roomCode;
       gameState.players = [];
       gameState.decks = {};
       gameState.lastDuel = null;
       gameState.winnerName = null;
       gameState.eliminatedNotice = null;
+      gameState.eliminatedPopupMsg = null;
+      gameState.gameStarted = false;
 
-      gameState.allowMult = document.getElementById('allowMult').checked;
+      gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 5;
       gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
-      gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 12;
+      gameState.allowMult = document.getElementById('allowMult').checked;
+      gameState.enableChat = document.getElementById('enableChatInput').checked;
+      gameState.enableVoice = document.getElementById('enableVoiceInput').checked;
 
-      initNetworkSession(async () => {
+      initNetworkSession(() => {
         initializeMasterDeck();
         dealCardsToPlayer(myId, myName, true, false, 'easy');
 
-        lobbyBots.forEach(b => {
-          dealCardsToPlayer(b.id, b.name, false, true, b.difficulty);
-        });
-
-        gameState.gameStarted = true;
-
-        showGameUI();
-        updateUI();
-
-        await animateRandomStarterSelection();
+        showWaitingRoom();
+        broadcastState();
+        updateWaitingRoomUI();
       });
     });
 
-    // --- 2. JOIN A GAME ---
+    // --- STANDARD JOIN GAME ---
     document.getElementById('joinBtn').addEventListener('click', () => {
       const inputCode = document.getElementById('joinCodeInput').value.trim();
-      if (!inputCode) return alert('Please enter room code');
+      if (!inputCode) return alert('Please enter 4-digit room code');
 
-      myName = getEnteredName();
+      myName = getEnteredName('playerNameInput');
       isHost = false;
       roomCode = inputCode;
 
@@ -553,14 +690,32 @@
       });
     });
 
+    // --- DIRECT LINK JOIN GAME ---
+    function joinGameDirect() {
+      myName = getEnteredName('directPlayerNameInput');
+      isHost = false;
+
+      initNetworkSession(() => {
+        setStatus('Syncing with Host...');
+        sendNetworkMessage({
+          type: 'JOIN_REQUEST',
+          id: myId,
+          name: myName
+        });
+      });
+    }
+
     // --- INCOMING MESSAGE HANDLER ---
     function handleIncomingData(data) {
       if (data.type === 'STATE_UPDATE') {
         gameState = data.state;
-        if (!document.getElementById('game').style.display || document.getElementById('game').style.display === 'none') {
+        if (!gameState.gameStarted) {
+          showWaitingRoom();
+          updateWaitingRoomUI();
+        } else {
           showGameUI();
+          updateUI();
         }
-        updateUI();
       }
       else if (data.type === 'CHAT_BROADCAST') {
         appendChatMessage(data.sender, data.text);
@@ -578,12 +733,20 @@
         // HOST PROCESSES CLIENT ACTIONS
         if (data.type === 'JOIN_REQUEST') {
           dealCardsToPlayer(data.id, data.name, false, false, 'easy');
-          gameState.statusMessage = data.name + ' joined the game!';
+          gameState.statusMessage = data.name + ' joined the room!';
+          broadcastState();
+          updateWaitingRoomUI();
+        }
+        else if (data.type === 'STAGE_CHALLENGE') {
+          stageChallenge(data.challengerId, data.defenderId, data.operation);
+        }
+        else if (data.type === 'EXECUTE_DEFENSE') {
+          executeStagedDuel();
+        }
+        else if (data.type === 'DISMISS_ELIMINATION') {
+          gameState.eliminatedPopupMsg = null;
           broadcastState();
           updateUI();
-        }
-        else if (data.type === 'CHALLENGE_ACTION') {
-          handleDuel(data.challengerId, data.defenderId, data.operation);
         }
         else if (data.type === 'CHAT_MSG') {
           appendChatMessage(data.sender, data.text);
@@ -592,7 +755,7 @@
       }
     }
 
-    // --- 3. DECK GENERATION & DISTRIBUTION ---
+    // --- DECK GENERATION & DISTRIBUTION ---
     function initializeMasterDeck() {
       let masterDeck = [];
       for (let top = 0; top <= gameState.maxNum; top++) {
@@ -625,43 +788,134 @@
       });
     }
 
-    // --- 4. VISUALIZED RANDOM SELECTION ---
-    async function animateRandomStarterSelection() {
+    // --- SCREEN NAVIGATION ---
+    function showWaitingRoom() {
+      document.getElementById('lobbySetup').style.display = 'none';
+      document.getElementById('directJoinScreen').style.display = 'none';
+      document.getElementById('game').style.display = 'none';
+      document.getElementById('waitingRoom').style.display = 'block';
+
+      document.getElementById('waitingCodeDisplay').innerText = roomCode;
+      document.getElementById('cfgCards').innerText = gameState.cardsPerPlayer;
+      document.getElementById('cfgMaxNum').innerText = gameState.maxNum;
+      document.getElementById('cfgMult').innerText = gameState.allowMult ? 'Yes' : 'No';
+      document.getElementById('cfgChat').innerText = gameState.enableChat ? 'Enabled' : 'Disabled';
+      document.getElementById('cfgVoice').innerText = gameState.enableVoice ? 'Enabled' : 'Disabled';
+
+      if (!isHost) {
+        document.getElementById('botAddSection').style.display = 'none';
+      }
+    }
+
+    function updateWaitingRoomUI() {
+      const listContainer = document.getElementById('waitingPlayerList');
+      listContainer.innerHTML = '';
+      document.getElementById('waitingPlayerCount').innerText = gameState.players.length;
+
+      gameState.players.forEach(p => {
+        const tag = document.createElement('span');
+        tag.className = 'player-tag';
+        const prefix = p.isHost ? '👑 Host: ' : (p.isBot ? '🤖 AI: ' : '👤 ');
+        let botRemoveLink = '';
+        if (isHost && p.isBot) {
+          botRemoveLink = ' <a href="#" onclick="removeLobbyBot(\'' + p.id + '\'); return false;" style="color:#ef4444; font-weight:bold;">×</a>';
+        }
+        tag.innerHTML = prefix + p.name + botRemoveLink;
+        listContainer.appendChild(tag);
+      });
+
+      const actionArea = document.getElementById('waitingRoomActionArea');
+      if (isHost) {
+        actionArea.innerHTML = '<button class="btn btn-success" onclick="hostStartGame()" style="font-size: 1.1em; padding: 12px 30px;">🚀 Start Game</button>';
+      } else {
+        actionArea.innerHTML = '<p style="color: #64748b; font-size: 1.05em; font-weight: 500;">⏳ Waiting for host to start the game...</p>';
+      }
+    }
+
+    // --- HOST STARTS GAME (TRIGGER SPINNER WHEEL) ---
+    async function hostStartGame() {
+      if (!isHost) return;
+      if (gameState.players.length < 2) {
+        return alert('You need at least 2 players (or AI bots) to start the game!');
+      }
+
+      gameState.gameStarted = true;
+      broadcastState();
+      
+      showGameUI();
+      updateUI();
+
+      await runSpinnerAnimation();
+    }
+
+    // --- ANIMATED SPINNER SELECTION WHEEL ---
+    async function runSpinnerAnimation() {
+      const overlay = document.getElementById('spinnerOverlay');
+      const wheelDisplay = document.getElementById('wheelDisplay');
+      overlay.style.display = 'flex';
+
       const activePlayers = gameState.players.filter(p => p.count > 0);
       if (activePlayers.length === 0) return;
 
-      gameState.isDueling = true;
       gameState.isSelectingStarter = true;
-      const totalSteps = 10;
 
-      for (let i = 0; i < totalSteps; i++) {
-        const tempPlayer = activePlayers[i % activePlayers.length];
-        gameState.currentTurn = tempPlayer.id;
-        gameState.statusMessage = '🎲 Selecting starting player: ' + tempPlayer.name + '...';
-        
-        updateUI();
-        await delay(100);
+      // Select random starting player index
+      const winningIndex = Math.floor(Math.random() * activePlayers.length);
+      const winnerPlayer = activePlayers[winningIndex];
+
+      const intervals = [60, 60, 60, 80, 80, 100, 120, 150, 200, 260, 340, 450, 600];
+      let currIdx = 0;
+
+      for (let delayMs of intervals) {
+        currIdx = (currIdx + 1) % activePlayers.length;
+        wheelDisplay.innerText = activePlayers[currIdx].name;
+        await delay(delayMs);
       }
 
-      const winner = activePlayers[Math.floor(Math.random() * activePlayers.length)];
-      gameState.currentTurn = winner.id;
-      gameState.statusMessage = '🎲 ' + winner.name + ' was randomly selected to challenge first!';
-      gameState.isDueling = false;
-      gameState.isSelectingStarter = false;
+      wheelDisplay.innerText = winnerPlayer.name;
+      wheelDisplay.style.borderColor = '#16a34a';
+      wheelDisplay.style.color = '#15803d';
+      wheelDisplay.style.background = '#f0fdf4';
+      document.getElementById('spinnerSubtext').innerText = '🎉 Selected to challenge first!';
 
-      broadcastState();
-      updateUI();
+      await delay(1200);
+
+      wheelDisplay.style.borderColor = '#0284c7';
+      wheelDisplay.style.color = '#0284c7';
+      wheelDisplay.style.background = '#f0f9ff';
+      document.getElementById('spinnerSubtext').innerText = 'Randomising turn order for all players';
+      overlay.style.display = 'none';
+
+      if (isHost) {
+        gameState.currentTurn = winnerPlayer.id;
+        gameState.statusMessage = '🎲 ' + winnerPlayer.name + ' was selected to challenge first!';
+        gameState.isSelectingStarter = false;
+
+        // Opponent selection default check
+        const validOpponents = gameState.players.filter(p => p.id !== winnerPlayer.id && p.count > 0);
+        selectedOpponentId = validOpponents.length === 1 ? validOpponents[0].id : null;
+        selectedOp = null;
+
+        broadcastState();
+        updateUI();
+      }
     }
 
-    // --- 5. RESTART GAME FUNCTION (HOST ONLY) ---
+    // --- RESTART GAME FUNCTION (HOST ONLY) ---
     async function restartGameWithNewSettings() {
       if (!isHost || gameState.isDueling) return;
 
       gameState.lastDuel = null;
       gameState.winnerName = null;
       gameState.eliminatedNotice = null;
+      gameState.eliminatedPopupMsg = null;
+      gameState.duelStage = 'IDLE';
+      gameState.pendingDuel = null;
+      victoryConfettiActive = false;
+      selectedOpponentId = null;
+      selectedOp = null;
 
-      gameState.cardsPerPlayer = parseInt(document.getElementById('inGameCardsPerPlayer').value) || 12;
+      gameState.cardsPerPlayer = parseInt(document.getElementById('inGameCardsPerPlayer').value) || 5;
       gameState.maxNum = parseInt(document.getElementById('inGameMaxNum').value);
       gameState.allowMult = document.getElementById('inGameAllowMult').checked;
 
@@ -677,13 +931,230 @@
       broadcastState();
       updateUI();
 
-      await animateRandomStarterSelection();
+      await runSpinnerAnimation();
     }
 
-    // --- 6. STRATEGIC BOT ALGORITHM & BOT TURN TRIGGER ---
+    // --- GAMEPLAY MOVE SELECTION FLOW ---
+    function selectOpponent(id) {
+      if (gameState.isDueling || gameState.currentTurn !== myId || gameState.duelStage !== 'IDLE') return;
+      const target = gameState.players.find(p => p.id === id);
+      if (!target || target.count === 0 || id === myId) return;
+      selectedOpponentId = id;
+      updateUI();
+    }
+
+    function selectOperation(op) {
+      if (gameState.isDueling || gameState.currentTurn !== myId || gameState.duelStage !== 'IDLE') return;
+      selectedOp = op;
+      updateUI();
+    }
+
+    // CLICKING TOP CARD FOR MOVE EXECUTION
+    function handleTopCardClick() {
+      if (!gameState.gameStarted || gameState.isDueling || gameState.isSelectingStarter) return;
+
+      const myDeck = gameState.decks[myId];
+      if (!myDeck || myDeck.length === 0) return;
+
+      // Scenario 1: Active Challenger clicks their card to launch challenge
+      if (gameState.currentTurn === myId && gameState.duelStage === 'IDLE') {
+        if (!selectedOpponentId) {
+          alert('Please select an opponent player first!');
+          return;
+        }
+        if (!selectedOp) {
+          alert('Please select an operation (+, -, ×) first!');
+          return;
+        }
+
+        if (isHost) {
+          stageChallenge(myId, selectedOpponentId, selectedOp);
+        } else {
+          sendNetworkMessage({
+            type: 'STAGE_CHALLENGE',
+            challengerId: myId,
+            defenderId: selectedOpponentId,
+            operation: selectedOp
+          });
+        }
+      }
+      // Scenario 2: Challenged Defender clicks their card to respond to challenge
+      else if (gameState.duelStage === 'WAITING_DEFENDER_CARD' && gameState.pendingDuel && gameState.pendingDuel.defenderId === myId) {
+        if (isHost) {
+          executeStagedDuel();
+        } else {
+          sendNetworkMessage({
+            type: 'EXECUTE_DEFENSE'
+          });
+        }
+      }
+    }
+
+    // --- STAGED DUEL EXECUTION FLOW ---
+    function stageChallenge(challengerId, defenderId, operation) {
+      if (!isHost) return;
+
+      const challenger = gameState.players.find(p => p.id === challengerId);
+      const defender = gameState.players.find(p => p.id === defenderId);
+      const cDeck = gameState.decks[challengerId];
+
+      if (!cDeck || cDeck.length === 0) return;
+
+      // Draw challenger's card immediately and update deck count
+      const cCard = cDeck.shift();
+      challenger.count = cDeck.length;
+
+      gameState.pendingDuel = { 
+        challengerId, 
+        defenderId, 
+        op: operation,
+        tableCards: [cCard]
+      };
+      gameState.duelStage = 'WAITING_DEFENDER_CARD';
+
+      // Immediately clear previous duel results and show Challenger's card on screen!
+      const cScore = evaluateCard(cCard, operation);
+      gameState.lastDuel = {
+        cName: challenger.name,
+        dName: defender.name,
+        op: operation,
+        cCard: cCard,
+        dCard: null,
+        cScore: cScore,
+        dScore: null,
+        winnerName: null,
+        statusText: '⚔️ ' + challenger.name + ' played a card! Waiting for ' + defender.name + '...'
+      };
+
+      gameState.statusMessage = '⚔️ ' + challenger.name + ' challenged ' + defender.name + ' (' + operation + ')! Waiting for ' + defender.name + ' to click their card...';
+      
+      broadcastState();
+      updateUI();
+
+      // Check if Defender is AI Bot -> 1 second delay before bot responds
+      if (defender && defender.isBot) {
+        setTimeout(() => {
+          executeStagedDuel();
+        }, 1000);
+      }
+    }
+
+    async function executeStagedDuel() {
+      if (!isHost || gameState.isDueling || !gameState.pendingDuel) return;
+      
+      gameState.isDueling = true;
+      gameState.duelStage = 'DUELING';
+
+      const { challengerId, defenderId, op, tableCards } = gameState.pendingDuel;
+      let cDeck = gameState.decks[challengerId];
+      let dDeck = gameState.decks[defenderId];
+
+      const defenderPlayer = gameState.players.find(p => p.id === defenderId);
+
+      if (!dDeck || dDeck.length === 0) {
+        gameState.isDueling = false;
+        gameState.duelStage = 'IDLE';
+        gameState.pendingDuel = null;
+        return;
+      }
+
+      // Draw defender card immediately
+      const dCard = dDeck.shift();
+      defenderPlayer.count = dDeck.length;
+      tableCards.push(dCard);
+
+      const challengerPlayer = gameState.players.find(p => p.id === challengerId);
+      const challengerName = challengerPlayer.name;
+      const defenderName = defenderPlayer.name;
+
+      const cCard = tableCards[0];
+      const cScore = evaluateCard(cCard, op);
+      const dScore = evaluateCard(dCard, op);
+
+      let winnerId = null;
+      if (cScore > dScore) {
+        winnerId = challengerId;
+      } else if (dScore > cScore) {
+        winnerId = defenderId;
+      } else {
+        winnerId = cScore >= dScore ? challengerId : defenderId;
+      }
+
+      const winnerName = gameState.players.find(p => p.id === winnerId).name;
+
+      // Immediately show defender's card, scores, and winner outcome comment
+      gameState.lastDuel = {
+        cName: challengerName,
+        dName: defenderName,
+        op: op,
+        cCard: cCard,
+        dCard: dCard,
+        cScore: cScore,
+        dScore: dScore,
+        winnerName: winnerName,
+        statusText: '🎉 ' + winnerName + ' wins the duel! Both cards will be added to ' + winnerName + '\'s stack.'
+      };
+
+      gameState.statusMessage = winnerName + ' won the duel! Cards moving to ' + winnerName + '\'s stack...';
+
+      broadcastState();
+      updateUI();
+
+      // DOUBLED DELAY: Cards remain visible for 4 seconds (4000ms) after completion
+      await delay(4000);
+
+      // Cards disappear after 4 seconds and are added to the winner's deck
+      gameState.decks[winnerId].push(...tableCards);
+      const winnerPlayerObj = gameState.players.find(p => p.id === winnerId);
+      winnerPlayerObj.count = gameState.decks[winnerId].length;
+
+      gameState.lastDuel = null; // Remove duel info from display!
+
+      let newlyEliminated = [];
+      gameState.players.forEach(p => {
+        let currentCount = gameState.decks[p.id] ? gameState.decks[p.id].length : 0;
+        if (p.count > 0 && currentCount === 0) {
+          newlyEliminated.push(p.name);
+        }
+        p.count = currentCount;
+      });
+
+      if (newlyEliminated.length > 0) {
+        gameState.eliminatedPopupMsg = newlyEliminated.join(", ") + " has run out of cards and is eliminated!";
+      }
+
+      gameState.currentTurn = winnerId;
+      gameState.statusMessage = winnerName + ' won the duel and gets the next challenge!';
+      gameState.duelStage = 'IDLE';
+      gameState.pendingDuel = null;
+
+      // Reset selection defaults for next turn
+      const validOpponents = gameState.players.filter(p => p.id !== winnerId && p.count > 0);
+      selectedOpponentId = validOpponents.length === 1 ? validOpponents[0].id : null;
+      selectedOp = null;
+
+      const activePlayers = gameState.players.filter(p => p.count > 0);
+      if (activePlayers.length === 1 && gameState.players.length > 1) {
+        gameState.winnerName = activePlayers[0].name;
+        gameState.statusMessage = '🏆 ' + activePlayers[0].name + ' HAS WON THE GAME!';
+        gameState.eliminatedPopupMsg = null;
+      }
+
+      gameState.isDueling = false;
+      broadcastState();
+      updateUI();
+    }
+
+    function evaluateCard(card, op) {
+      if (op === '+') return card.top + card.bot;
+      if (op === '-') return card.top - card.bot;
+      if (op === 'x') return card.top * card.bot;
+      return 0;
+    }
+
+    // --- STRATEGIC AI BOT TURNS WITH 1 SECOND DELAY ---
     function getSmartOperation(botCard, maxNum, allowMult) {
       const ops = allowMult ? ['+', '-', 'x'] : ['+', '-'];
-      
       let allCards = [];
       for (let top = 0; top <= maxNum; top++) {
         for (let bot = 0; bot <= top; bot++) {
@@ -697,12 +1168,9 @@
       ops.forEach(op => {
         const botScore = evaluateCard(botCard, op);
         let wins = 0;
-
         allCards.forEach(card => {
           const oppScore = evaluateCard(card, op);
-          if (botScore > oppScore) {
-            wins++;
-          }
+          if (botScore > oppScore) wins++;
         });
 
         if (wins > maxWins) {
@@ -715,12 +1183,14 @@
     }
 
     async function checkAndTriggerBotTurn() {
-      if (!isHost || gameState.isDueling || gameState.isSelectingStarter || gameState.winnerName) return;
+      if (!isHost || gameState.isDueling || gameState.isSelectingStarter || gameState.winnerName || gameState.duelStage !== 'IDLE') return;
 
       const activePlayer = gameState.players.find(p => p.id === gameState.currentTurn);
       if (activePlayer && activePlayer.isBot && activePlayer.count > 0) {
         gameState.isDueling = true;
-        await delay(1200);
+
+        // 1-second delay for bot decisions
+        await delay(1000);
 
         const validTargets = gameState.players.filter(p => p.id !== activePlayer.id && p.count > 0);
         if (validTargets.length === 0) {
@@ -737,175 +1207,56 @@
 
         const topCard = botDeck[0];
         const ops = gameState.allowMult ? ['+', '-', 'x'] : ['+', '-'];
-        let chosenOp;
-
-        if (activePlayer.difficulty === 'hard') {
-          chosenOp = getSmartOperation(topCard, gameState.maxNum, gameState.allowMult);
-        } else {
-          chosenOp = ops[Math.floor(Math.random() * ops.length)];
-        }
+        let chosenOp = activePlayer.difficulty === 'hard'
+          ? getSmartOperation(topCard, gameState.maxNum, gameState.allowMult)
+          : ops[Math.floor(Math.random() * ops.length)];
 
         gameState.isDueling = false;
-        handleDuel(activePlayer.id, target.id, chosenOp);
+        stageChallenge(activePlayer.id, target.id, chosenOp);
       }
     }
 
-    // --- 7. ANIMATED STEP-BY-STEP DUEL LOGIC ---
-    async function handleDuel(challengerId, defenderId, op) {
-      if (gameState.isDueling) return;
-      gameState.isDueling = true;
-
-      let cDeck = gameState.decks[challengerId];
-      let dDeck = gameState.decks[defenderId];
-
-      if (!cDeck || !dDeck || cDeck.length === 0 || dDeck.length === 0) {
-        gameState.isDueling = false;
-        return;
-      }
-
-      let tableCards = [];
-      let cCard, dCard, cScore, dScore;
-      let winnerId = null;
-
-      while (true) {
-        cCard = cDeck.shift();
-        dCard = dDeck.shift();
-        tableCards.push(cCard, dCard);
-
-        cScore = evaluateCard(cCard, op);
-        dScore = evaluateCard(dCard, op);
-
-        if (cScore > dScore) {
-          winnerId = challengerId;
-          break;
-        } else if (dScore > cScore) {
-          winnerId = defenderId;
-          break;
-        }
-
-        if (cDeck.length === 0 || dDeck.length === 0) {
-          winnerId = cScore >= dScore ? challengerId : defenderId;
-          break;
-        }
-      }
-
-      const challengerName = gameState.players.find(p => p.id === challengerId).name;
-      const defenderName = gameState.players.find(p => p.id === defenderId).name;
-      const winnerName = gameState.players.find(p => p.id === winnerId).name;
-
-      // STAGE 1: Reveal Challenger Card (1s)
-      gameState.lastDuel = {
-        stage: 1,
-        cName: challengerName,
-        dName: defenderName,
-        cCard: cCard,
-        dCard: null,
-        cScore: null,
-        dScore: null,
-        op: op,
-        winnerName: null
-      };
-      gameState.statusMessage = challengerName + ' plays their card...';
-      broadcastState();
-      updateUI();
-      await delay(1000);
-
-      // STAGE 2: Reveal Challenger Result (1s)
-      gameState.lastDuel.stage = 2;
-      gameState.lastDuel.cScore = cScore;
-      broadcastState();
-      updateUI();
-      await delay(1000);
-
-      // STAGE 3: Reveal Defender Card (1s)
-      gameState.lastDuel.stage = 3;
-      gameState.lastDuel.dCard = dCard;
-      gameState.statusMessage = defenderName + ' plays their card...';
-      broadcastState();
-      updateUI();
-      await delay(1000);
-
-      // STAGE 4: Reveal Defender Result (1s)
-      gameState.lastDuel.stage = 4;
-      gameState.lastDuel.dScore = dScore;
-      gameState.statusMessage = 'Evaluating scores...';
-      broadcastState();
-      updateUI();
-      await delay(1000);
-
-      // STAGE 5: Announce Winner (1s)
-      gameState.lastDuel.stage = 5;
-      gameState.lastDuel.winnerName = winnerName;
-
-      gameState.decks[winnerId].push(...tableCards);
-
-      let newlyEliminated = [];
-      gameState.players.forEach(p => {
-        let currentCount = gameState.decks[p.id] ? gameState.decks[p.id].length : 0;
-        if (p.count > 0 && currentCount === 0) {
-          newlyEliminated.push(p.name);
-        }
-        p.count = currentCount;
-      });
-
-      if (newlyEliminated.length > 0) {
-        gameState.eliminatedNotice = "💀 " + newlyEliminated.join(", ") + " ran out of cards and is eliminated!";
-        setTimeout(() => {
-          gameState.eliminatedNotice = null;
-          broadcastState();
-          updateUI();
-        }, 5000);
-      }
-
-      gameState.currentTurn = winnerId;
-      gameState.statusMessage = winnerName + ' won the duel and gets the next challenge!';
-
-      const activePlayers = gameState.players.filter(p => p.count > 0);
-      if (activePlayers.length === 1 && gameState.players.length > 1) {
-        gameState.winnerName = activePlayers[0].name;
-        gameState.statusMessage = '🏆 ' + activePlayers[0].name + ' HAS WON THE GAME!';
-      }
-
-      broadcastState();
-      updateUI();
-      await delay(1000);
-
-      gameState.isDueling = false;
-      broadcastState();
-      updateUI();
-    }
-
-    function evaluateCard(card, op) {
-      if (op === '+') return card.top + card.bot;
-      if (op === '-') return card.top - card.bot;
-      if (op === 'x') return card.top * card.bot;
-      return 0;
-    }
-
-    function selectOpponent(id) {
-      if (gameState.isDueling) return;
-      const target = gameState.players.find(p => p.id === id);
-      if (!target || target.count === 0 || id === myId) return;
-      selectedOpponentId = id;
-      updateUI();
-    }
-
-    function issueChallenge(op) {
-      if (!selectedOpponentId) return alert('Please click on a player below to select an opponent!');
-
+    // --- POPUP MODAL HANDLERS ---
+    function closeEliminationModal() {
       if (isHost) {
-        handleDuel(myId, selectedOpponentId, op);
+        gameState.eliminatedPopupMsg = null;
+        broadcastState();
       } else {
-        sendNetworkMessage({
-          type: 'CHALLENGE_ACTION',
-          challengerId: myId,
-          defenderId: selectedOpponentId,
-          operation: op
-        });
+        sendNetworkMessage({ type: 'DISMISS_ELIMINATION' });
+      }
+      document.getElementById('eliminationModal').style.display = 'none';
+    }
+
+    function closeVictoryModal() {
+      document.getElementById('victoryModal').style.display = 'none';
+    }
+
+    function triggerVictoryConfetti() {
+      if (victoryConfettiActive) return;
+      victoryConfettiActive = true;
+
+      if (typeof confetti === 'function') {
+        const duration = 3.5 * 1000;
+        const animationEnd = Date.now() + duration;
+        const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 1000 };
+
+        const interval = setInterval(function() {
+          const timeLeft = animationEnd - Date.now();
+          if (timeLeft <= 0) {
+            return clearInterval(interval);
+          }
+          const particleCount = 50 * (timeLeft / duration);
+          confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 } });
+          confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 } });
+        }, 250);
       }
     }
 
-    // --- 8. CHAT SYSTEM ---
+    function randomInRange(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    // --- CHAT SYSTEM ---
     function sendChatMessage() {
       const input = document.getElementById('chatInput');
       const text = input.value.trim();
@@ -923,6 +1274,7 @@
 
     function appendChatMessage(sender, text) {
       const container = document.getElementById('chatMessages');
+      if (!container) return;
       const div = document.createElement('div');
       div.style.marginBottom = '4px';
       div.innerHTML = '<strong>' + sender + ':</strong> ' + text;
@@ -930,25 +1282,34 @@
       container.scrollTop = container.scrollHeight;
     }
 
-    function broadcastState() {
-      sendNetworkMessage({ type: 'STATE_UPDATE', state: gameState });
-    }
-
-    // --- 9. UI RENDER HELPERS ---
+    // --- UI RENDER HELPERS ---
     function showGameUI() {
-      document.getElementById('lobby').style.display = 'none';
+      document.getElementById('lobbySetup').style.display = 'none';
+      document.getElementById('directJoinScreen').style.display = 'none';
+      document.getElementById('waitingRoom').style.display = 'none';
       document.getElementById('game').style.display = 'block';
+
       document.getElementById('displayCode').innerText = roomCode;
       document.getElementById('displayName').innerText = myName;
+
       if (!gameState.allowMult) {
-        document.getElementById('multBtn').style.display = 'none';
+        document.getElementById('opMultBtn').style.display = 'none';
       }
+
+      document.getElementById('chatBoxContainer').style.display = gameState.enableChat ? 'block' : 'none';
+      document.getElementById('voiceBtn').style.display = gameState.enableVoice ? 'inline-block' : 'none';
     }
 
     function updateUI() {
       const validOpponents = gameState.players.filter(p => p.id !== myId && p.count > 0);
-      if ((!selectedOpponentId || !validOpponents.some(p => p.id === selectedOpponentId)) && validOpponents.length > 0) {
+
+      // OPPONENT SELECTION LOGIC: Only auto-select if 1 valid opponent left. Otherwise require manual selection.
+      if (validOpponents.length === 1) {
         selectedOpponentId = validOpponents[0].id;
+      } else {
+        if (selectedOpponentId && !validOpponents.some(p => p.id === selectedOpponentId)) {
+          selectedOpponentId = null;
+        }
       }
 
       // Render Player List Tags
@@ -956,14 +1317,16 @@
       listContainer.innerHTML = '';
       gameState.players.forEach(p => {
         const span = document.createElement('span');
-        
         let tagClass = 'player-tag';
+
         if (p.count === 0) {
           tagClass += ' eliminated';
-        } else if (p.id !== myId) {
+        } else if (p.id !== myId && gameState.currentTurn === myId && gameState.duelStage === 'IDLE') {
           tagClass += ' selectable';
           if (p.id === selectedOpponentId) tagClass += ' selected';
           span.onclick = () => selectOpponent(p.id);
+        } else if (p.id === selectedOpponentId) {
+          tagClass += ' selected';
         }
 
         span.className = tagClass;
@@ -976,16 +1339,43 @@
         }
       });
 
-      // Render Vertical Deck Column
+      // Render Operation Selection Buttons state
+      ['opPlusBtn', 'opMinusBtn', 'opMultBtn'].forEach(btnId => {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        const opVal = btnId === 'opPlusBtn' ? '+' : (btnId === 'opMinusBtn' ? '-' : 'x');
+        if (selectedOp === opVal) {
+          btn.classList.add('selected');
+        } else {
+          btn.classList.remove('selected');
+        }
+      });
+
+      // Render Vertical Deck Column & Clickable Top Card Highlighting
       const myDeck = gameState.decks[myId] || [];
       document.getElementById('fullPileCount').innerText = myDeck.length;
 
       const topContainer = document.getElementById('topCardContainer');
+      const topHint = document.getElementById('topCardHint');
+
+      let isMyTurnToClick = false;
+
+      if (gameState.currentTurn === myId && gameState.duelStage === 'IDLE' && selectedOpponentId && selectedOp && myDeck.length > 0 && !gameState.isDueling) {
+        isMyTurnToClick = true;
+      } else if (gameState.duelStage === 'WAITING_DEFENDER_CARD' && gameState.pendingDuel && gameState.pendingDuel.defenderId === myId && myDeck.length > 0 && !gameState.isDueling) {
+        isMyTurnToClick = true;
+      }
+
       if (myDeck.length > 0) {
         const topCard = myDeck[0];
-        topContainer.innerHTML = '<div class="card" style="margin: auto;"><div class="top">' + topCard.top + '</div><div class="bot">' + topCard.bot + '</div></div>';
+        topContainer.className = 'card ' + (isMyTurnToClick ? 'card-clickable-pulse' : '');
+        topContainer.style.margin = 'auto';
+        topContainer.innerHTML = '<div class="top">' + topCard.top + '</div><div class="bot">' + topCard.bot + '</div>';
+        topHint.style.display = isMyTurnToClick ? 'block' : 'none';
       } else {
+        topContainer.className = '';
         topContainer.innerHTML = '<em>No cards remaining</em>';
+        topHint.style.display = 'none';
       }
 
       const fullContainer = document.getElementById('fullPileContainer');
@@ -997,17 +1387,34 @@
         fullContainer.appendChild(cardDiv);
       });
 
-      // Render Announcements
+      // Render Elimination Popup Modal
+      const elimModal = document.getElementById('eliminationModal');
+      if (gameState.eliminatedPopupMsg && !gameState.winnerName) {
+        document.getElementById('eliminationModalText').innerText = gameState.eliminatedPopupMsg;
+        elimModal.style.display = 'flex';
+      } else {
+        elimModal.style.display = 'none';
+      }
+
+      // Render Victory Celebration Popup Modal with Confetti
+      const victoryModal = document.getElementById('victoryModal');
       const winnerBanner = document.getElementById('winnerBanner');
+
       if (gameState.winnerName) {
         winnerBanner.style.display = 'block';
         if (gameState.winnerName === myName) {
           winnerBanner.innerHTML = '🎉 🏆 CONGRATULATIONS ' + gameState.winnerName.toUpperCase() + '! 🏆 🎉<br><span style="font-size:0.85em; font-weight:normal;">You collected all the cards and won Duel of Sums!</span>';
+          document.getElementById('victoryModalText').innerHTML = '🎉 CONGRATULATIONS ' + gameState.winnerName.toUpperCase() + '! 🎉<br><span style="font-size:0.9em; font-weight:normal;">You collected all the cards and won Duel of Sums!</span>';
         } else {
           winnerBanner.innerHTML = '🏆 GAME OVER! ' + gameState.winnerName + ' HAS WON THE GAME! 🏆';
+          document.getElementById('victoryModalText').innerText = '🏆 GAME OVER!\n' + gameState.winnerName + ' has collected all the cards and won the game!';
         }
+        
+        victoryModal.style.display = 'flex';
+        triggerVictoryConfetti();
       } else {
         winnerBanner.style.display = 'none';
+        victoryModal.style.display = 'none';
       }
 
       const selfElimBanner = document.getElementById('selfEliminatedBanner');
@@ -1018,27 +1425,40 @@
         selfElimBanner.style.display = 'none';
       }
 
-      const toast = document.getElementById('toastNotification');
-      if (gameState.eliminatedNotice) {
-        toast.style.display = 'block';
-        toast.innerText = gameState.eliminatedNotice;
-      } else {
-        toast.style.display = 'none';
-      }
+      // Panels Toggle (Challenger vs Defender vs Spectator)
+      const challengerPanel = document.getElementById('challengerPanel');
+      const defenderPanel = document.getElementById('defenderPanel');
+      const spectatorPanel = document.getElementById('spectatorPanel');
 
-      // Action Panel vs Spectator Panel
       const actionButtons = document.querySelectorAll('.action-btn');
-      actionButtons.forEach(btn => btn.disabled = gameState.isDueling);
+      actionButtons.forEach(btn => btn.disabled = gameState.isDueling || gameState.duelStage !== 'IDLE');
 
-      if (gameState.currentTurn === myId && gameState.players.length >= 2 && !gameState.isDueling && myDeck.length > 0 && !gameState.winnerName) {
-        document.getElementById('challengerPanel').style.display = 'block';
-        document.getElementById('spectatorPanel').style.display = 'none';
+      if (gameState.currentTurn === myId && gameState.duelStage === 'IDLE' && gameState.players.length >= 2 && !gameState.isDueling && myDeck.length > 0 && !gameState.winnerName) {
+        challengerPanel.style.display = 'block';
+        defenderPanel.style.display = 'none';
+        spectatorPanel.style.display = 'none';
 
         const selectedPlayer = gameState.players.find(p => p.id === selectedOpponentId);
-        document.getElementById('selectedOpponentText').innerText = selectedPlayer ? selectedPlayer.name + ' (' + selectedPlayer.count + ' cards)' : 'None';
-      } else {
-        document.getElementById('challengerPanel').style.display = 'none';
-        document.getElementById('spectatorPanel').style.display = 'block';
+        document.getElementById('selectedOpponentText').innerText = selectedPlayer ? selectedPlayer.name + ' (' + selectedPlayer.count + ' cards)' : 'None (Click a player below)';
+
+        const promptBox = document.getElementById('challengerActionPrompt');
+        if (selectedOpponentId && selectedOp) {
+          promptBox.style.display = 'block';
+        } else {
+          promptBox.style.display = 'none';
+        }
+      } 
+      else if (gameState.duelStage === 'WAITING_DEFENDER_CARD' && gameState.pendingDuel && gameState.pendingDuel.defenderId === myId && !gameState.winnerName) {
+        challengerPanel.style.display = 'none';
+        defenderPanel.style.display = 'block';
+        spectatorPanel.style.display = 'none';
+        const challengerPlayer = gameState.players.find(p => p.id === gameState.pendingDuel.challengerId);
+        document.getElementById('defenderPromptText').innerText = '⚔️ ' + challengerPlayer.name + ' has challenged you (' + gameState.pendingDuel.op + ')! Click your top card on the right to make your move!';
+      }
+      else {
+        challengerPanel.style.display = 'none';
+        defenderPanel.style.display = 'none';
+        spectatorPanel.style.display = 'block';
         document.getElementById('statusMessage').innerText = gameState.statusMessage || 'Waiting for players...';
       }
 
@@ -1055,7 +1475,7 @@
         hostPanel.style.display = 'none';
       }
 
-      // Render Duel Results
+      // Render Duel Results Display
       if (gameState.lastDuel) {
         const d = gameState.lastDuel;
         document.getElementById('cName').innerText = d.cName;
@@ -1068,10 +1488,10 @@
           document.getElementById('cCard').innerHTML = '<div class="card card-back">?</div>';
         }
 
-        if (d.cScore !== null) {
+        if (d.cScore !== null && d.cScore !== undefined) {
           document.getElementById('cScore').innerText = '= ' + d.cScore;
         } else {
-          document.getElementById('cScore').innerText = d.stage === 1 ? '...' : '';
+          document.getElementById('cScore').innerText = '';
         }
 
         if (d.dCard) {
@@ -1080,16 +1500,16 @@
           document.getElementById('dCard').innerHTML = '<div class="card card-back">?</div>';
         }
 
-        if (d.dScore !== null) {
+        if (d.dScore !== null && d.dScore !== undefined) {
           document.getElementById('dScore').innerText = '= ' + d.dScore;
         } else {
-          document.getElementById('dScore').innerText = d.stage === 3 ? '...' : '';
+          document.getElementById('dScore').innerText = '';
         }
 
-        if (d.stage === 5 && d.winnerName) {
-          document.getElementById('duelOutcome').innerText = '🎉 ' + d.winnerName + ' wins the cards!';
+        if (d.winnerName) {
+          document.getElementById('duelOutcome').innerText = '🎉 ' + d.winnerName + ' wins! Both cards will be added to ' + d.winnerName + '\'s stack.';
         } else {
-          document.getElementById('duelOutcome').innerText = '⚔️ Duel in progress...';
+          document.getElementById('duelOutcome').innerText = d.statusText || '⚔️ Duel in progress...';
         }
       } else {
         document.getElementById('cName').innerText = 'Challenger';
@@ -1099,15 +1519,14 @@
         document.getElementById('dCard').innerHTML = '<div class="card card-back">?</div>';
         document.getElementById('cScore').innerText = '';
         document.getElementById('dScore').innerText = '';
-        document.getElementById('duelOutcome').innerText = 'No duels played yet';
+        document.getElementById('duelOutcome').innerText = 'No duels in progress';
       }
 
-      // Check if host needs to execute AI Bot turn automatically
+      // Host Bot check
       if (isHost) {
         checkAndTriggerBotTurn();
       }
     }
   </script>
-<script src="https://nugget-maths.co.nz/notice.js" defer></script>
 </body>
 </html>
