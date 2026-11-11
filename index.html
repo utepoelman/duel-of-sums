@@ -8,6 +8,8 @@
   <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
   <!-- CANVAS CONFETTI LIBRARY -->
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- PDF generation for printable card sets -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     /* BASE & RESPONSIVE LAYOUT */
     body { font-family: system-ui, sans-serif; padding: 12px; max-width: 1100px; margin: auto; line-height: 1.4; background: #f8fafc; color: #1e293b; }
@@ -27,13 +29,16 @@
     .top-bar { display: flex; justify-content: space-between; align-items: center; background: #f1f5f9; padding: 10px 16px; border-radius: 10px; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; font-size: 1.05em; }
     
     /* CARD STYLING & PULSE ANIMATION */
-    .card { display: inline-block; width: 85px; height: 125px; border: 3px solid #0284c7; border-radius: 10px; background: #f0f9ff; text-align: center; font-weight: bold; margin: 4px; vertical-align: middle; box-shadow: 0 4px 8px rgba(0,0,0,0.08); user-select: none; transition: transform 0.15s ease, box-shadow 0.15s ease; }
-    .card .top { font-size: 1.8em; color: #0369a1; border-bottom: 2px solid #bae6fd; padding-top: 8px; }
-    .card .bot { font-size: 1.3em; color: #64748b; padding-top: 6px; }
+    .card { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 85px; height: 125px; border: 3px solid #0284c7; border-radius: 10px; background: #f0f9ff; text-align: center; font-weight: bold; margin: 4px; vertical-align: middle; box-shadow: 0 4px 8px rgba(0,0,0,0.08); user-select: none; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card .top { font-size: 1.8em; color: #0369a1; padding: 0; line-height: 1.15; }
+    .card .bot { font-size: 1.3em; color: #64748b; padding: 0; line-height: 1.15; }
 
     .card.mini { width: 62px; height: 90px; font-size: 0.85em; border-width: 2px; border-color: #94a3b8; background: #ffffff; }
-    .card.mini .top { font-size: 1.3em; padding-top: 5px; border-bottom-width: 1px; }
-    .card.mini .bot { font-size: 1.3em; padding-top: 4px; }
+    .card.mini .top { font-size: 1.3em; padding: 0; border: 0; }
+    .card.mini .bot { font-size: 1.3em; padding: 0; }
+
+    .card.mini.clickable { cursor: pointer; transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; }
+    .card.mini.clickable:hover { transform: scale(1.08); border-color: #0284c7; box-shadow: 0 4px 8px rgba(2, 132, 199, 0.25); }
 
     .card.card-back { background: #e2e8f0; border-color: #cbd5e1; color: #94a3b8; display: inline-flex; align-items: center; justify-content: center; font-size: 2.2em; }
 
@@ -93,13 +98,116 @@
 
     /* MODAL OVERLAY */
     .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.75); display: flex; align-items: center; justify-content: center; z-index: 999; backdrop-filter: blur(4px); }
-    .modal-card { background: white; border-radius: 16px; padding: 30px; text-align: center; max-width: 440px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); border: 3px solid #0284c7; }
+    .modal-card { background: white; border-radius: 16px; padding: 26px; text-align: center; max-width: 460px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); border: 3px solid #0284c7; max-height: 85vh; overflow-y: auto; }
     .wheel-display { font-size: 1.8em; font-weight: bold; color: #0284c7; padding: 20px; background: #f0f9ff; border: 2px dashed #0284c7; border-radius: 12px; margin: 16px 0; min-height: 40px; display: flex; align-items: center; justify-content: center; }
+
+    /* PAGE HEADING & PER-PLAYER THEME CONTROL */
+    .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .page-heading h2 { margin: 0.4em 0; }
+    .theme-toggle { white-space: nowrap; }
+
+    /* DARK THEME: applied locally on each player's device; it is not shared through game state. */
+    body.dark-theme { background: #0f172a; color: #e2e8f0; }
+    body.dark-theme .box { background: #1e293b; border-color: #475569; color: #e2e8f0; }
+    body.dark-theme .top-bar { background: #334155; color: #f1f5f9; }
+    body.dark-theme .deck-column,
+    body.dark-theme .chat-box { background: #172033; border-color: #475569; }
+    body.dark-theme .sticky-top-card { background: #1e3a5f; border-color: #38bdf8; }
+    body.dark-theme .card { background: #172b40; border-color: #38bdf8; }
+    body.dark-theme .card .top { color: #7dd3fc; }
+    body.dark-theme .card .bot { color: #cbd5e1; }
+    body.dark-theme .card.mini { background: #1e293b; border-color: #64748b; }
+    body.dark-theme .card.card-back { background: #334155; border-color: #64748b; color: #cbd5e1; }
+    body.dark-theme .card-clickable-pulse { background: #123b2a !important; border-color: #4ade80 !important; }
+    body.dark-theme .player-tag { background: #334155; color: #e2e8f0; }
+    body.dark-theme .player-tag.selectable { background: #172b40; color: #7dd3fc; border-color: #38bdf8; }
+    body.dark-theme .player-tag.selected { background: #0369a1; color: #fff; }
+    body.dark-theme .player-tag.eliminated { background: #1e293b; color: #94a3b8; }
+    body.dark-theme .op-btn { background: #334155; color: #f1f5f9; border-color: #64748b; }
+    body.dark-theme .op-btn.selected { background: #0284c7; color: #fff; }
+    body.dark-theme .chat-messages { background: #0f172a; color: #e2e8f0; border-color: #475569; }
+    body.dark-theme .modal-card { background: #1e293b; color: #e2e8f0; }
+    body.dark-theme .wheel-display { background: #172b40; color: #7dd3fc; }
+    body.dark-theme .top-bar button,
+    body.dark-theme input,
+    body.dark-theme select { color-scheme: dark; }
+    body.dark-theme #duelArea,
+    body.dark-theme #lobbyStatusContainer,
+    body.dark-theme #waitingPlayerList,
+    body.dark-theme #botAddSection,
+    body.dark-theme #challengerPanel,
+    body.dark-theme #defenderPanel,
+    body.dark-theme #spectatorPanel,
+    body.dark-theme #hostGamePanel,
+    body.dark-theme #analysisContent > div > div { background: #263449 !important; border-color: #475569 !important; color: #e2e8f0; }
+    body.dark-theme #challengerActionPrompt { background: #173d2b !important; color: #bbf7d0 !important; border-color: #16a34a !important; }
+    body.dark-theme #duelArea p,
+    body.dark-theme #duelArea h4,
+    body.dark-theme #hostGamePanel p,
+    body.dark-theme #chatBoxContainer h4 { color: #e2e8f0 !important; }
+    body.dark-theme hr { border-color: #475569; }
+
+    /* EXTRA DARK-MODE CONTRAST: cover secondary text and inline-coloured labels. */
+    body.dark-theme h1, body.dark-theme h2, body.dark-theme h3,
+    body.dark-theme h4, body.dark-theme h5, body.dark-theme h6,
+    body.dark-theme p, body.dark-theme label, body.dark-theme li,
+    body.dark-theme legend, body.dark-theme summary,
+    body.dark-theme .box, body.dark-theme .box p,
+    body.dark-theme .box label, body.dark-theme .box li,
+    body.dark-theme #duelOutcome, body.dark-theme #statusMessage,
+    body.dark-theme #lobbyStatusContainer *, body.dark-theme #waitingPlayerList *,
+    body.dark-theme #challengerPanel *, body.dark-theme #defenderPanel *,
+    body.dark-theme #spectatorPanel *, body.dark-theme #hostGamePanel *,
+    body.dark-theme #analysisContent * {
+      color: #e2e8f0;
+    }
+    body.dark-theme [style*="color:"]:not(.card):not(.card *) {
+      color: #e2e8f0 !important;
+    }
+    body.dark-theme a { color: #7dd3fc !important; }
+    body.dark-theme input, body.dark-theme select, body.dark-theme textarea {
+      background-color: #0f172a; color: #f1f5f9; border-color: #64748b;
+    }
+    body.dark-theme input::placeholder, body.dark-theme textarea::placeholder { color: #94a3b8; }
+    body.dark-theme .badge { background: #0369a1; color: #ffffff; }
+    body.dark-theme .winner-banner { background: #713f12; border-color: #eab308; color: #fef3c7; }
+    body.dark-theme .eliminated-banner { background: #7f1d1d; border-color: #f87171; color: #fee2e2; }
+    body.dark-theme .toast-alert { background: #334155; border-left-color: #f87171; color: #f1f5f9; }
+    body.dark-theme .host-restart-box { background: #123b2a; border-color: #4ade80; color: #dcfce7; }
+    body.dark-theme .modal-card h3 { color: #7dd3fc !important; }
+    body.dark-theme .card .top { color: #7dd3fc !important; }
+    body.dark-theme .card .bot { color: #cbd5e1 !important; }
+    body.dark-theme .card.card-back { color: #e2e8f0 !important; }
+
+    /* Card-analysis modal: deliberately dark surfaces with high-contrast text. */
+    body.dark-theme #analysisContent .analysis-operation {
+      background: #172033 !important; border: 1px solid #64748b !important; color: #f8fafc !important;
+    }
+    body.dark-theme #analysisContent .analysis-operation-title,
+    body.dark-theme #analysisContent .analysis-operation-title span { color: #bae6fd !important; }
+    body.dark-theme #analysisContent .analysis-result {
+      background: #1e3a5f !important; color: #f0f9ff !important;
+    }
+    body.dark-theme #analysisContent .analysis-stat {
+      background: #263449 !important; border-color: #64748b !important; color: #f8fafc !important;
+    }
+    body.dark-theme #analysisContent .analysis-stat strong,
+    body.dark-theme #analysisContent .analysis-stat div { color: #f8fafc !important; }
+    body.dark-theme #analysisContent .analysis-stat.wins { background: #123b2a !important; border-color: #16a34a !important; }
+    body.dark-theme #analysisContent .analysis-stat.draws { background: #493b12 !important; border-color: #ca8a04 !important; }
+    body.dark-theme #analysisContent .analysis-stat.losses { background: #4c1d2b !important; border-color: #e11d48 !important; }
+    body.dark-theme #analysisSubtext { color: #cbd5e1 !important; }
+    body.dark-theme #printableCardSetBox { background: #172033 !important; border-color: #64748b !important; color: #f1f5f9 !important; }
+    body.dark-theme #pdfStatus { color: #cbd5e1 !important; }
   </style>
 </head>
 <body>
 
-  <h2>⚔️ Duel of Sums</h2>
+  <div class="page-heading">
+    <h2>⚔️ Duel of Sums</h2>
+    <button id="themeToggle" class="btn btn-secondary theme-toggle" type="button"
+            onclick="toggleTheme()" aria-label="Switch colour theme">🌙 Dark mode</button>
+  </div>
 
   <!-- 1. FULL SETUP LOBBY SCREEN -->
   <div id="lobbySetup" class="box">
@@ -113,21 +221,24 @@
       <h4>Host Setup Options</h4>
       <p style="margin: 6px 0;">
         <label><strong>Cards Dealt Per Player:</strong> 
-          <input type="number" id="cardsPerPlayerInput" value="5" min="1" max="25" style="width: 60px; padding: 6px; font-size: 0.95em;">
+          <input type="number" id="cardsPerPlayerInput" value="5" min="1" max="50" style="width: 60px; padding: 6px; font-size: 0.95em;">
         </label>
       </p>
       <p style="margin: 6px 0;">
         <label><strong>Max Card Number:</strong> 
-          <select id="maxNumSelect" style="padding: 6px; font-size: 0.95em;">
-            <option value="12" selected>12 (Standard - 91 Cards)</option>
-            <option value="10">10 (Lower Numbers)</option>
-            <option value="5">5 (Beginner)</option>
-          </select>
+          <input type="number" id="maxNumSelect" value="12" min="5" max="20" step="1"
+                 style="width: 70px; padding: 6px; font-size: 0.95em;">
         </label>
       </p>
       <p style="margin: 6px 0;">
         <label><input type="checkbox" id="allowMult" checked> Include Multiplication (×)</label>
       </p>
+      <div id="printableCardSetBox" style="margin: 12px 0 16px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: #f8fafc;">
+        <strong>🃏 Printable card set</strong>
+        <p style="font-size: 0.9em; margin: 5px 0 8px;">Download the complete card set for the selected maximum number as a double-sided A4 PDF. Print at 100% scale and flip on the long edge.</p>
+        <button type="button" class="btn btn-secondary" onclick="downloadPrintableCardSet()">⬇️ Download printable cards (PDF)</button>
+        <span id="pdfStatus" role="status" style="display:block; font-size:0.82em; margin-top:5px; color:#475569;"></span>
+      </div>
       
       <!-- OPTIONAL CHAT & VOICE SETTINGS -->
       <div style="background: #f1f5f9; padding: 10px; border-radius: 8px; margin: 10px 0;">
@@ -235,7 +346,18 @@
     </div>
   </div>
 
-  <!-- 7. GAMEPLAY SCREEN -->
+  <!-- 7. CARD DECK ANALYSIS POPUP MODAL -->
+  <div id="cardAnalysisModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 480px; border-color: #0284c7;">
+      <div style="font-size: 2.2em; margin-bottom: 4px;">📊</div>
+      <h3 id="analysisCardTitle" style="margin: 0; color: #0369a1; font-size: 1.4em;">Card Analysis</h3>
+      <p id="analysisSubtext" style="color: #64748b; font-size: 0.88em; margin: 4px 0 12px 0;"></p>
+      <div id="analysisContent"></div>
+      <button class="btn btn-secondary" onclick="closeAnalysisModal()" style="margin-top: 10px;">Close Analysis</button>
+    </div>
+  </div>
+
+  <!-- 8. GAMEPLAY SCREEN -->
   <div id="game" class="box" style="display: none;">
     
     <!-- TOP STATUS BAR -->
@@ -342,16 +464,13 @@
           <p style="font-size: 0.85em; color: #475569; margin: 0 0 10px 0;">Adjust settings below and start a new round for all connected players.</p>
           <p style="margin: 6px 0;">
             <label><strong>Cards Dealt Per Player:</strong> 
-              <input type="number" id="inGameCardsPerPlayer" value="5" min="1" max="25" style="width: 60px; padding: 4px; font-size: 0.95em;">
+              <input type="number" id="inGameCardsPerPlayer" value="5" min="1" max="50" style="width: 60px; padding: 4px; font-size: 0.95em;">
             </label>
           </p>
           <p style="margin: 6px 0;">
             <label><strong>Max Card Number:</strong> 
-              <select id="inGameMaxNum" style="padding: 4px; font-size: 0.95em;">
-                <option value="12" selected>12 (Standard - 91 Cards)</option>
-                <option value="10">10 (Lower Numbers)</option>
-                <option value="5">5 (Beginner)</option>
-              </select>
+              <input type="number" id="inGameMaxNum" value="12" min="5" max="20" step="1"
+                     style="width: 70px; padding: 4px; font-size: 0.95em;">
             </label>
           </p>
           <p style="margin: 6px 0;">
@@ -375,10 +494,16 @@
             <div id="topCardHint" style="font-size: 0.75em; color: #16a34a; font-weight: bold; margin-top: 4px; display: none;">
               👆 CLICK TO MAKE MOVE!
             </div>
+            <div id="topCardAnalyzeBtn" style="margin-top: 4px;">
+              <a href="#" onclick="showCardAnalysisForTop(); return false;" style="font-size:0.75em; color:#0284c7; font-weight:bold; text-decoration:underline;">📊 Analyze Top Card</a>
+            </div>
           </div>
 
-          <p style="font-size: 0.8em; color: #64748b; margin: 6px 0; text-align: center;">
+          <p style="font-size: 0.8em; color: #64748b; margin: 6px 0 2px 0; text-align: center;">
             Upcoming Sequence (<span id="fullPileCount">0</span> cards):
+          </p>
+          <p style="font-size: 0.75em; color: #0284c7; margin: 0 0 8px 0; text-align: center; font-weight: 500;">
+            💡 Click any card below to view deck analysis
           </p>
           <div class="vertical-pile" id="fullPileContainer"></div>
         </div>
@@ -388,7 +513,33 @@
   </div>
 
   <script>
-    // NETWORKING ENGINE: MQTT OVER WEBSOCKETS (PORT 443)
+
+    // --- LOCAL PLAYER THEME (not broadcast to other players) ---
+    function applyTheme() {
+      let darkMode = false;
+      try { darkMode = localStorage.getItem('duelOfSumsTheme') === 'dark'; } catch (e) {}
+      document.body.classList.toggle('dark-theme', darkMode);
+      const button = document.getElementById('themeToggle');
+      if (button) {
+        button.innerText = darkMode ? '☀️ Light mode' : '🌙 Dark mode';
+        button.setAttribute('aria-label', darkMode ? 'Switch to light mode' : 'Switch to dark mode');
+      }
+    }
+
+    function toggleTheme() {
+      const darkMode = !document.body.classList.contains('dark-theme');
+      document.body.classList.toggle('dark-theme', darkMode);
+      const button = document.getElementById('themeToggle');
+      if (button) {
+        button.innerText = darkMode ? '☀️ Light mode' : '🌙 Dark mode';
+        button.setAttribute('aria-label', darkMode ? 'Switch to light mode' : 'Switch to dark mode');
+      }
+      try { localStorage.setItem('duelOfSumsTheme', darkMode ? 'dark' : 'light'); } catch (e) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', applyTheme);
+
+    // NETWORKING ENGINE: MQTT OVER WEBSOCKETS (PORT 8084)
     let mqttClient = null;
     let isHost = false;
     let roomCode = '';
@@ -658,7 +809,7 @@
       gameState.sidePot = [];
 
       gameState.cardsPerPlayer = parseInt(document.getElementById('cardsPerPlayerInput').value) || 5;
-      gameState.maxNum = parseInt(document.getElementById('maxNumSelect').value);
+      gameState.maxNum = Math.min(20, Math.max(5, parseInt(document.getElementById('maxNumSelect').value, 10) || 12));
       gameState.allowMult = document.getElementById('allowMult').checked;
       gameState.enableChat = document.getElementById('enableChatInput').checked;
       gameState.enableVoice = document.getElementById('enableVoiceInput').checked;
@@ -793,6 +944,196 @@
       });
     }
 
+    // --- PRINTABLE CARD SET PDF ---
+    // Each A4 sheet contains up to nine fronts followed by its matching back page.
+    // Back-page columns are mirrored for duplex printing with a long-edge flip.
+    function downloadPrintableCardSet() {
+      const status = document.getElementById('pdfStatus');
+      const maxInput = document.getElementById('maxNumSelect');
+      const maxNum = Math.min(20, Math.max(5, parseInt(maxInput.value, 10) || 12));
+      maxInput.value = maxNum;
+      if (!window.jspdf || !window.jspdf.jsPDF) {
+        status.textContent = 'PDF library could not be loaded. Please check your internet connection and try again.';
+        return;
+      }
+
+      status.textContent = 'Preparing your card set…';
+      try {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+        const cards = [];
+        for (let top = 0; top <= maxNum; top++) {
+          for (let bot = 0; bot <= top; bot++) cards.push({ top, bot });
+        }
+
+        const cols = 3, rows = 3, cardW = 60, cardH = 84, gapX = 4, gapY = 4;
+        const startX = (210 - (cols * cardW + (cols - 1) * gapX)) / 2;
+        const startY = (297 - (rows * cardH + (rows - 1) * gapY)) / 2;
+        const slotsPerPage = cols * rows;
+
+        function makeCardImage(card, back) {
+          const canvas = document.createElement('canvas');
+          canvas.width = 600; canvas.height = 840;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          const r = 38;
+          ctx.beginPath();
+          ctx.moveTo(r, 8); ctx.lineTo(592-r, 8); ctx.quadraticCurveTo(592, 8, 592, 8+r);
+          ctx.lineTo(592, 832-r); ctx.quadraticCurveTo(592, 832, 592-r, 832);
+          ctx.lineTo(r, 832); ctx.quadraticCurveTo(8, 832, 8, 832-r);
+          ctx.lineTo(8, r); ctx.quadraticCurveTo(8, 8, r, 8); ctx.closePath();
+          if (back) {
+            const grad = ctx.createLinearGradient(0, 0, 600, 840);
+            grad.addColorStop(0, '#0f172a'); grad.addColorStop(0.55, '#1e293b'); grad.addColorStop(1, '#0b1120');
+            ctx.fillStyle = grad; ctx.fill();
+            ctx.lineWidth = 16; ctx.strokeStyle = '#38bdf8'; ctx.stroke();
+            ctx.lineWidth = 3; ctx.strokeStyle = '#94a3b8';
+            ctx.beginPath(); ctx.roundRect(34, 34, 532, 772, 25); ctx.stroke();
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.font = 'bold 150px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif';
+            ctx.fillStyle = '#f8fafc'; ctx.fillText('⚔️', 300, 365);
+            ctx.font = 'bold 44px system-ui, sans-serif'; ctx.fillStyle = '#bae6fd';
+            ctx.fillText('DUEL OF SUMS', 300, 545);
+            ctx.font = '24px system-ui, sans-serif'; ctx.fillStyle = '#cbd5e1';
+            ctx.fillText('⚔  •  ⚔', 300, 600);
+          } else {
+            ctx.fillStyle = '#f8fafc'; ctx.fill();
+            ctx.lineWidth = 16; ctx.strokeStyle = '#0284c7'; ctx.stroke();
+            ctx.lineWidth = 3; ctx.strokeStyle = '#bae6fd';
+            ctx.beginPath(); ctx.roundRect(34, 34, 532, 772, 25); ctx.stroke();
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.font = 'bold 205px system-ui, sans-serif'; ctx.fillStyle = '#075985';
+            ctx.fillText(String(card.top), 300, 300);
+            // No horizontal divider: the two values are separate card numbers, not a fraction.
+            ctx.font = 'bold 165px system-ui, sans-serif'; ctx.fillStyle = '#334155';
+            ctx.fillText(String(card.bot), 300, 585);
+            ctx.font = 'bold 24px system-ui, sans-serif'; ctx.fillStyle = '#64748b';
+            ctx.fillText('DUEL OF SUMS', 300, 750);
+          }
+          return canvas.toDataURL('image/png');
+        }
+
+        const totalSheets = Math.ceil(cards.length / slotsPerPage);
+        for (let sheet = 0; sheet < totalSheets; sheet++) {
+          if (sheet > 0) pdf.addPage('a4', 'portrait');
+          const pageCards = cards.slice(sheet * slotsPerPage, (sheet + 1) * slotsPerPage);
+          pageCards.forEach((card, i) => {
+            const col = i % cols, row = Math.floor(i / cols);
+            const x = startX + col * (cardW + gapX), y = startY + row * (cardH + gapY);
+            pdf.addImage(makeCardImage(card, false), 'PNG', x, y, cardW, cardH, undefined, 'FAST');
+          });
+
+          pdf.addPage('a4', 'portrait');
+          pageCards.forEach((card, i) => {
+            const col = i % cols, row = Math.floor(i / cols);
+            const mirroredCol = cols - 1 - col;
+            const x = startX + mirroredCol * (cardW + gapX), y = startY + row * (cardH + gapY);
+            pdf.addImage(makeCardImage(card, true), 'PNG', x, y, cardW, cardH, undefined, 'FAST');
+          });
+        }
+
+        pdf.save('Duel-of-Sums-Cards-0-to-' + maxNum + '.pdf');
+        status.textContent = cards.length + ' cards prepared across ' + totalSheets + ' double-sided A4 sheet' + (totalSheets === 1 ? '' : 's') + '. Print at 100% scale, double-sided, flipping on the long edge.';
+      } catch (err) {
+        console.error('Could not create printable card PDF:', err);
+        status.textContent = 'Something went wrong while creating the PDF. Please try again.';
+      }
+    }
+
+    // --- CARD DECK ANALYSIS FUNCTION ---
+    function showCardAnalysis(top, bot) {
+      const maxNum = gameState.maxNum || 12;
+      const allowMult = gameState.allowMult;
+
+      let totalCards = 0;
+      const ops = ['+', '-'];
+      if (allowMult) ops.push('x');
+
+      const stats = {
+        '+': { val: top + bot, wins: 0, draws: 0, losses: 0 },
+        '-': { val: top - bot, wins: 0, draws: 0, losses: 0 },
+        'x': { val: top * bot, wins: 0, draws: 0, losses: 0 }
+      };
+
+      for (let t = 0; t <= maxNum; t++) {
+        for (let b = 0; b <= t; b++) {
+          totalCards++;
+          
+          // Addition
+          const pVal = t + b;
+          if (stats['+'].val > pVal) stats['+'].wins++;
+          else if (stats['+'].val === pVal) stats['+'].draws++;
+          else stats['+'].losses++;
+
+          // Subtraction
+          const mVal = t - b;
+          if (stats['-'].val > mVal) stats['-'].wins++;
+          else if (stats['-'].val === mVal) stats['-'].draws++;
+          else stats['-'].losses++;
+
+          // Multiplication
+          if (allowMult) {
+            const xVal = t * b;
+            if (stats['x'].val > xVal) stats['x'].wins++;
+            else if (stats['x'].val === xVal) stats['x'].draws++;
+            else stats['x'].losses++;
+          }
+        }
+      }
+
+      document.getElementById('analysisCardTitle').innerText = 'Card Analysis: [' + top + ' | ' + bot + ']';
+      document.getElementById('analysisSubtext').innerText = 'Compared against all ' + totalCards + ' cards in full theoretical deck (Max Num: ' + maxNum + ')';
+
+      let html = '<div style="display: flex; flex-direction: column; gap: 12px; margin: 12px 0; text-align: left;">';
+
+      ops.forEach(op => {
+        const label = op === '+' ? 'Addition (+)' : (op === '-' ? 'Subtraction (-)' : 'Multiplication (×)');
+        const res = stats[op];
+        const winPct = Math.round((res.wins / totalCards) * 100);
+        const drawPct = Math.round((res.draws / totalCards) * 100);
+        const lossPct = Math.round((res.losses / totalCards) * 100);
+
+        html += `
+          <div class="analysis-operation" style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 10px; border-radius: 8px;">
+            <div class="analysis-operation-title" style="font-weight: bold; font-size: 1.05em; color: #0369a1; display: flex; justify-content: space-between;">
+              <span>${label}</span>
+              <span class="analysis-result" style="background: #e0f2fe; padding: 2px 8px; border-radius: 6px;">Result: ${res.val}</span>
+            </div>
+            <div style="margin-top: 8px; font-size: 0.88em; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; text-align: center;">
+              <div class="analysis-stat wins" style="background: #dcfce7; color: #15803d; padding: 6px; border-radius: 6px; border: 1px solid #86efac;">
+                <div style="font-weight: bold; font-size: 1.1em;">${res.wins}</div>
+                <div>Beats (${winPct}%)</div>
+              </div>
+              <div class="analysis-stat draws" style="background: #fef9c3; color: #854d0e; padding: 6px; border-radius: 6px; border: 1px solid #fef08a;">
+                <div style="font-weight: bold; font-size: 1.1em;">${res.draws}</div>
+                <div>Draws (${drawPct}%)</div>
+              </div>
+              <div class="analysis-stat losses" style="background: #fee2e2; color: #b91c1c; padding: 6px; border-radius: 6px; border: 1px solid #fca5a5;">
+                <div style="font-weight: bold; font-size: 1.1em;">${res.losses}</div>
+                <div>Loses (${lossPct}%)</div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      html += '</div>';
+
+      document.getElementById('analysisContent').innerHTML = html;
+      document.getElementById('cardAnalysisModal').style.display = 'flex';
+    }
+
+    function showCardAnalysisForTop() {
+      const myDeck = gameState.decks[myId] || [];
+      if (myDeck.length > 0) {
+        showCardAnalysis(myDeck[0].top, myDeck[0].bot);
+      }
+    }
+
+    function closeAnalysisModal() {
+      document.getElementById('cardAnalysisModal').style.display = 'none';
+    }
+
     // --- SCREEN NAVIGATION ---
     function showWaitingRoom() {
       document.getElementById('lobbySetup').style.display = 'none';
@@ -924,7 +1265,7 @@
       selectedOp = null;
 
       gameState.cardsPerPlayer = parseInt(document.getElementById('inGameCardsPerPlayer').value) || 5;
-      gameState.maxNum = parseInt(document.getElementById('inGameMaxNum').value);
+      gameState.maxNum = Math.min(20, Math.max(5, parseInt(document.getElementById('inGameMaxNum').value, 10) || 12));
       gameState.allowMult = document.getElementById('inGameAllowMult').checked;
 
       initializeMasterDeck();
@@ -1040,6 +1381,7 @@
         cScore: cScore,
         dScore: null,
         winnerName: null,
+        cardsAtStake: currentTableCards.length + 1,
         statusText: '⚔️ ' + challenger.name + ' played a card! Waiting for ' + defender.name + '...'
       };
 
@@ -1134,7 +1476,8 @@
           cScore: cScore,
           dScore: dScore,
           winnerName: null,
-          statusText: '🤝 IT\'S A DRAW (' + cScore + ' = ' + dScore + ')! Cards placed to the side. ' + challengerName + ' and ' + defenderName + ' must duel again!'
+          cardsAtStake: tableCards.length,
+          statusText: '🤝 IT\'S A DRAW (' + cScore + ' = ' + dScore + ')! ' + tableCards.length + ' cards are now in the pot. ' + challengerName + ' and ' + defenderName + ' must duel again!'
         };
         gameState.statusMessage = '🤝 DRAW! Cards put to the side. Duel again to resolve!';
       } else {
@@ -1147,6 +1490,7 @@
           cScore: cScore,
           dScore: dScore,
           winnerName: winnerName,
+          cardsAtStake: tableCards.length,
           statusText: '🎉 ' + winnerName + ' wins the duel! All ' + tableCards.length + ' cards will be added to ' + winnerName + '\'s stack.'
         };
         gameState.statusMessage = winnerName + ' won the duel! ' + tableCards.length + ' cards moving to ' + winnerName + '\'s stack...';
@@ -1155,7 +1499,7 @@
       broadcastState();
       updateUI();
 
-      // DOUBLED DELAY: Cards remain visible for 4 seconds (4000ms) after completion
+      // Cards remain visible for 4 seconds after completion
       await delay(4000);
 
       // RESOLVE TIE vs DECISIVE WIN
@@ -1385,7 +1729,7 @@
     function updateUI() {
       const validOpponents = gameState.players.filter(p => p.id !== myId && p.count > 0);
 
-      // OPPONENT SELECTION LOGIC: Only auto-select if 1 valid opponent left. Otherwise require manual selection.
+      // OPPONENT SELECTION LOGIC: Only auto-select if 1 valid opponent left.
       if (validOpponents.length === 1) {
         selectedOpponentId = validOpponents[0].id;
       } else {
@@ -1439,6 +1783,7 @@
 
       const topContainer = document.getElementById('topCardContainer');
       const topHint = document.getElementById('topCardHint');
+      const topAnalyzeBtn = document.getElementById('topCardAnalyzeBtn');
 
       let isMyTurnToClick = false;
 
@@ -1454,17 +1799,22 @@
         topContainer.style.margin = 'auto';
         topContainer.innerHTML = '<div class="top">' + topCard.top + '</div><div class="bot">' + topCard.bot + '</div>';
         topHint.style.display = isMyTurnToClick ? 'block' : 'none';
+        topAnalyzeBtn.style.display = 'block';
       } else {
         topContainer.className = '';
         topContainer.innerHTML = '<em>No cards remaining</em>';
         topHint.style.display = 'none';
+        topAnalyzeBtn.style.display = 'none';
       }
 
+      // Render Upcoming Sequence Cards (Clickable for Analysis)
       const fullContainer = document.getElementById('fullPileContainer');
       fullContainer.innerHTML = '';
       myDeck.forEach((card, idx) => {
         const cardDiv = document.createElement('div');
-        cardDiv.className = 'card mini' + (idx === 0 ? ' active' : '');
+        cardDiv.className = 'card mini clickable' + (idx === 0 ? ' active' : '');
+        cardDiv.title = 'Click to analyze card performance against the deck';
+        cardDiv.onclick = () => showCardAnalysis(card.top, card.bot);
         cardDiv.innerHTML = '<div class="top">' + card.top + '</div><div class="bot">' + card.bot + '</div>';
         fullContainer.appendChild(cardDiv);
       });
@@ -1589,7 +1939,10 @@
         }
 
         if (d.winnerName) {
-          document.getElementById('duelOutcome').innerText = '🎉 ' + d.winnerName + ' wins! Both cards will be added to ' + d.winnerName + '\'s stack.';
+          document.getElementById('duelOutcome').innerText = d.statusText || ('🎉 ' + d.winnerName + ' wins! All ' + (d.cardsAtStake || 2) + ' cards will be added to ' + d.winnerName + '\'s stack.');
+        } else if (gameState.sidePot && gameState.sidePot.length > 0) {
+          const cardsAtStake = d.cardsAtStake || (gameState.sidePot.length + (d.dCard ? 0 : 1));
+          document.getElementById('duelOutcome').innerText = '⚔️ TIE-BREAKER DUEL — ' + cardsAtStake + ' CARDS AT STAKE. The winner collects all ' + cardsAtStake + ' cards.' + (d.dCard ? '\n' + (d.statusText || '') : '\n' + d.cName + ' has played. Waiting for ' + d.dName + '...');
         } else {
           document.getElementById('duelOutcome').innerText = d.statusText || '⚔️ Duel in progress...';
         }
